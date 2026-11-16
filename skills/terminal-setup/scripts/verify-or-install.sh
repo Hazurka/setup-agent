@@ -1,496 +1,547 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# verify-or-install.sh
-# Multi-platform audit & installation script for modern terminal environment.
-# Supported OS: macOS (Darwin), openSUSE, Fedora, Debian, Ubuntu, Arch.
-# Shells: Bash & Zsh (full feature parity).
-# Rule: Always favour official vendor package manager repositories for robust,
-#       updatable installations.
+# verify-or-install.sh (terminal-setup)
+# Audit or apply the modern terminal environment on macOS and Linux:
+#   Ghostty, Bash + Zsh (feature parity), Starship, eza, Fastfetch,
+#   zsh-autosuggestions, zsh-syntax-highlighting, JetBrains Mono (Nerd) font.
+# Rule: install only through native package managers using vendor-official
+#       repositories. Anything else is reported as a manual step, never piped
+#       from curl.
+#
+# Exit codes: 0 = environment complete (after apply: verified complete)
+#             1 = components missing or a step failed
+#             2 = usage / unsupported environment
+# Compatible with macOS /bin/bash 3.2.
 # ==============================================================================
+
+# Helpers below are invoked indirectly through try().
+# shellcheck disable=SC2329
 
 set -euo pipefail
 
 MODE="check"
 AUTO_CONFIRM=false
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOURCES_DIR="$(cd "${SCRIPT_DIR}/../resources" && pwd)"
+DRY_RUN=false
+SHOW_DIFF=false
+UPDATE_CONFIGS=false
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--check | --apply] [options]
+
+Modes:
+  --check            Audit only, change nothing (default)
+  --apply            Install missing packages and deploy missing configs
+
+Options:
+  -y, --yes          Do not prompt (required when there is no TTY, e.g. agents)
+  --dry-run          With --apply: print every command instead of running it
+  --diff             Show a unified diff for configs that differ from templates
+  --update-configs   With --apply: replace configs that differ from templates
+                     (the old file is kept as <file>.bak-<timestamp>)
+  -h, --help         Show this help
+EOF
+}
 
 for arg in "$@"; do
   case "$arg" in
-    --apply|--install)
-      MODE="apply"
-      ;;
-    -y|--yes)
-      AUTO_CONFIRM=true
-      ;;
-    --check|--audit)
-      MODE="check"
-      ;;
-    -h|--help)
-      echo "Usage: $(basename "$0") [--check|--apply] [-y]"
-      echo "  --check   Audit system environment and report status (default)"
-      echo "  --apply   Execute vendor-recommended package manager installations & configs"
-      echo "  -y        Non-interactive mode (automatically confirm prompts)"
-      exit 0
-      ;;
+    --apply|--install) MODE="apply" ;;
+    --check|--audit)   MODE="check" ;;
+    -y|--yes)          AUTO_CONFIRM=true ;;
+    --dry-run)         DRY_RUN=true ;;
+    --diff)            SHOW_DIFF=true ;;
+    --update-configs)  UPDATE_CONFIGS=true ;;
+    -h|--help)         usage; exit 0 ;;
+    *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-echo "======================================================================"
-echo " Modern Terminal Environment Inspector & Installer"
-echo " (Vendor-Official Package Manager Driven)"
-echo "======================================================================"
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ASSETS_DIR="$SKILL_DIR/assets"
+
+# Test hooks: the test-suite uses these to simulate other platforms.
+OS_TYPE="${SETUP_AGENT_OS_TYPE:-$(uname -s)}"
+OS_RELEASE_FILE="${SETUP_AGENT_OS_RELEASE:-/etc/os-release}"
+
+FAILED_STEPS=()
+MANUAL_STEPS=()
 
 # ------------------------------------------------------------------------------
-# 1. OS & Distribution Detection
+# Command helpers
 # ------------------------------------------------------------------------------
-OS_TYPE="$(uname -s)"
+run() {
+  if [ "$DRY_RUN" = true ]; then
+    echo "  [dry-run] $*"
+    return 0
+  fi
+  "$@"
+}
+
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    run "$@"
+  elif [ "$DRY_RUN" = true ] || command -v sudo &>/dev/null; then
+    run sudo "$@"
+  else
+    echo "[-] Need root for '$*' but sudo is not available." >&2
+    return 1
+  fi
+}
+
+# try <label> <command...>: run a step, record (not abort on) failure.
+try() {
+  local label="$1"
+  shift
+  if ! "$@"; then
+    echo "[!] Step failed: $label"
+    FAILED_STEPS+=("$label")
+  fi
+}
+
+manual() {
+  echo "[*] Manual step: $1"
+  MANUAL_STEPS+=("$1")
+}
+
+# ------------------------------------------------------------------------------
+# 1. OS & distribution detection
+# ------------------------------------------------------------------------------
 DISTRO="unknown"
 DISTRO_FAMILY="unknown"
-DISTRO_VERSION_ID=""
-PKG_MGR="unknown"
-SUDO_CMD=""
+PKG_MGR="none"
 
 if [ "$OS_TYPE" = "Darwin" ]; then
   DISTRO="macOS"
   DISTRO_FAMILY="darwin"
-  if command -v brew &>/dev/null; then
-    PKG_MGR="brew"
-  fi
-elif [ "$OS_TYPE" = "Linux" ]; then
-  if [ -f /etc/os-release ]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    DISTRO="${NAME:-Linux}"
-    DISTRO_ID="${ID:-}"
-    DISTRO_LIKE="${ID_LIKE:-}"
-    DISTRO_VERSION_ID="${VERSION_ID:-}"
+  command -v brew &>/dev/null && PKG_MGR="brew"
+elif [ "$OS_TYPE" = "Linux" ] && [ -f "$OS_RELEASE_FILE" ]; then
+  # Read in a subshell so os-release variables don't leak into this script.
+  OS_INFO="$(
+    # shellcheck disable=SC1090
+    . "$OS_RELEASE_FILE"
+    echo "${ID:-}|${ID_LIKE:-}|${PRETTY_NAME:-${NAME:-Linux}}"
+  )"
+  OS_ID="${OS_INFO%%|*}"
+  OS_REST="${OS_INFO#*|}"
+  OS_LIKE="${OS_REST%%|*}"
+  DISTRO="${OS_REST#*|}"
+  IDS=" $OS_ID $OS_LIKE "
 
-    if [[ "$DISTRO_ID" =~ (opensuse|suse) ]] || [[ "$DISTRO_LIKE" =~ (suse) ]]; then
-      DISTRO_FAMILY="suse"
-      PKG_MGR="zypper"
-    elif [[ "$DISTRO_ID" =~ (fedora|rhel|centos|rocky|alma) ]] || [[ "$DISTRO_LIKE" =~ (fedora|rhel) ]]; then
-      DISTRO_FAMILY="fedora"
-      PKG_MGR="dnf"
-    elif [[ "$DISTRO_ID" =~ (debian|ubuntu|pop|mint) ]] || [[ "$DISTRO_LIKE" =~ (debian|ubuntu) ]]; then
-      DISTRO_FAMILY="debian"
-      PKG_MGR="apt"
-    elif [[ "$DISTRO_ID" =~ (arch|manjaro) ]] || [[ "$DISTRO_LIKE" =~ (arch) ]]; then
-      DISTRO_FAMILY="arch"
-      PKG_MGR="pacman"
-    fi
-  fi
-
-  if [ "$(id -u)" -ne 0 ]; then
-    if command -v sudo &>/dev/null; then
-      SUDO_CMD="sudo"
-    else
-      echo "[!] Warning: Script is not running as root and 'sudo' was not found."
-    fi
-  fi
-fi
-
-echo "[*] OS:           $OS_TYPE"
-echo "[*] Distribution: $DISTRO (Family: $DISTRO_FAMILY)"
-echo "[*] Package Mgr:  $PKG_MGR"
-echo "[*] Architecture: $(uname -m)"
-echo "[*] Current User: $(whoami)"
-echo "[*] Active Shell: ${SHELL:-unknown}"
-
-# ------------------------------------------------------------------------------
-# 2. Check Terminal Emulator (Ghostty)
-# ------------------------------------------------------------------------------
-echo ""
-echo "--> Checking Terminal Emulator (Ghostty)..."
-HAS_GHOSTTY=false
-if [ "$OS_TYPE" = "Darwin" ]; then
-  if [ -d "/Applications/Ghostty.app" ]; then
-    echo "[+] Ghostty: installed (/Applications/Ghostty.app)"
-    HAS_GHOSTTY=true
+  if [ "$OS_ID" = "fedora" ]; then
+    DISTRO_FAMILY="fedora"
   else
-    echo "[-] Ghostty: missing from /Applications"
+    case "$IDS" in
+      *" rhel "*|*" centos "*) DISTRO_FAMILY="rhel" ;;  # COPRs used here are Fedora-only
+      *suse*)                  DISTRO_FAMILY="suse" ;;
+      *" arch "*)              DISTRO_FAMILY="arch" ;;
+      *" debian "*|*" ubuntu "*) DISTRO_FAMILY="debian" ;;
+      *" fedora "*)            DISTRO_FAMILY="fedora" ;;
+    esac
   fi
-else
-  if command -v ghostty &>/dev/null; then
-    echo "[+] Ghostty: installed ($(command -v ghostty))"
-    HAS_GHOSTTY=true
-  else
-    echo "[-] Ghostty: missing"
-  fi
-fi
 
-# ------------------------------------------------------------------------------
-# 3. Check Shells (Bash & Zsh)
-# ------------------------------------------------------------------------------
-echo ""
-echo "--> Checking Shells (Bash & Zsh)..."
-
-BASH_INSTALLED=false
-if command -v bash &>/dev/null; then
-  echo "[+] Bash: installed ($(command -v bash))"
-  BASH_INSTALLED=true
-else
-  echo "[-] Bash: missing"
-fi
-
-ZSH_INSTALLED=false
-if command -v zsh &>/dev/null; then
-  ZSH_PATH="$(command -v zsh)"
-  ZSH_VERSION_STR="$("$ZSH_PATH" --version 2>/dev/null || echo 'unknown')"
-  echo "[+] Zsh:  installed at $ZSH_PATH ($ZSH_VERSION_STR)"
-  ZSH_INSTALLED=true
-else
-  echo "[-] Zsh:  NOT installed (will be installed via $PKG_MGR during --apply)"
-fi
-
-# ------------------------------------------------------------------------------
-# 4. Check Core CLI Tools
-# ------------------------------------------------------------------------------
-echo ""
-echo "--> Checking CLI Tools..."
-
-check_tool() {
-  local tool="$1"
-  if command -v "$tool" &>/dev/null; then
-    local path
-    path="$(command -v "$tool")"
-    echo "[+] $tool: installed at $path"
-    return 0
-  else
-    echo "[-] $tool: missing"
-    return 1
-  fi
-}
-
-HAS_EZA=false && check_tool eza && HAS_EZA=true || true
-HAS_STARSHIP=false && check_tool starship && HAS_STARSHIP=true || true
-HAS_FASTFETCH=false && check_tool fastfetch && HAS_FASTFETCH=true || true
-
-# ------------------------------------------------------------------------------
-# 5. Check Zsh Plugins
-# ------------------------------------------------------------------------------
-echo ""
-echo "--> Checking Zsh Plugins..."
-
-find_plugin() {
-  local plugin_name="$1"
-  local found=""
-  local candidates=(
-    "${HOMEBREW_PREFIX:-/opt/homebrew}/share/${plugin_name}/${plugin_name}.zsh"
-    "/usr/local/share/${plugin_name}/${plugin_name}.zsh"
-    "/usr/share/${plugin_name}/${plugin_name}.zsh"
-    "/usr/share/zsh/plugins/${plugin_name}/${plugin_name}.zsh"
-    "$HOME/.zsh/${plugin_name}/${plugin_name}.zsh"
-  )
-
-  for p in "${candidates[@]}"; do
-    if [ -f "$p" ]; then
-      found="$p"
-      break
-    fi
-  done
-
-  if [ -n "$found" ]; then
-    echo "[+] $plugin_name: found at $found"
-    return 0
-  else
-    echo "[-] $plugin_name: missing"
-    return 1
-  fi
-}
-
-HAS_AUTOSUGGESTIONS=false && find_plugin "zsh-autosuggestions" && HAS_AUTOSUGGESTIONS=true || true
-HAS_SYNTAX_HIGHLIGHT=false && find_plugin "zsh-syntax-highlighting" && HAS_SYNTAX_HIGHLIGHT=true || true
-
-# ------------------------------------------------------------------------------
-# 6. Check Configuration Files
-# ------------------------------------------------------------------------------
-echo ""
-echo "--> Checking Configuration Files..."
-
-CONFIG_FILES=(
-  "$HOME/.bash_profile"
-  "$HOME/.bashrc"
-  "$HOME/.zprofile"
-  "$HOME/.zshrc"
-  "$HOME/.config/ghostty/config"
-  "$HOME/.config/starship.toml"
-  "$HOME/.config/fastfetch/config.jsonc"
-)
-
-MISSING_CONFIGS=()
-for cfg in "${CONFIG_FILES[@]}"; do
-  if [ -f "$cfg" ]; then
-    echo "[+] Config found: $cfg"
-  else
-    echo "[-] Config missing: $cfg"
-    MISSING_CONFIGS+=("$cfg")
-  fi
-done
-
-# Ghostty config validation
-if [ "$OS_TYPE" = "Darwin" ] && [ -x "/Applications/Ghostty.app/Contents/MacOS/ghostty" ] && [ -f "$HOME/.config/ghostty/config" ]; then
-  if /Applications/Ghostty.app/Contents/MacOS/ghostty +validate-config --config-file="$HOME/.config/ghostty/config" &>/dev/null; then
-    echo "[+] Ghostty config validation: passed"
-  else
-    echo "[!] Ghostty config validation: failed"
-  fi
-elif command -v ghostty &>/dev/null && [ -f "$HOME/.config/ghostty/config" ]; then
-  if ghostty +validate-config --config-file="$HOME/.config/ghostty/config" &>/dev/null; then
-    echo "[+] Ghostty config validation: passed"
-  else
-    echo "[!] Ghostty config validation: failed"
-  fi
-fi
-
-# ------------------------------------------------------------------------------
-# 7. Audit Summary
-# ------------------------------------------------------------------------------
-echo ""
-echo "======================================================================"
-echo " Audit Summary"
-echo "======================================================================"
-
-ALL_OK=true
-[ "$HAS_GHOSTTY" = false ] && ALL_OK=false
-[ "$BASH_INSTALLED" = false ] && ALL_OK=false
-[ "$ZSH_INSTALLED" = false ] && ALL_OK=false
-[ "$HAS_EZA" = false ] && ALL_OK=false
-[ "$HAS_STARSHIP" = false ] && ALL_OK=false
-[ "$HAS_FASTFETCH" = false ] && ALL_OK=false
-[ "$HAS_AUTOSUGGESTIONS" = false ] && ALL_OK=false
-[ "$HAS_SYNTAX_HIGHLIGHT" = false ] && ALL_OK=false
-[ ${#MISSING_CONFIGS[@]} -gt 0 ] && ALL_OK=false
-
-if [ "$ALL_OK" = true ]; then
-  echo "[OK] All components, shells, and configurations are present and verified!"
-  exit 0
-fi
-
-echo "[!] System has missing components or configurations."
-
-if [ "$MODE" != "apply" ]; then
-  echo ""
-  echo "Inspection completed. To run vendor-recommended installations & setup, run:"
-  echo "  $0 --apply"
-  exit 0
-fi
-
-# ------------------------------------------------------------------------------
-# 8. Apply Phase: Vendor-Official Package Manager Driven
-# ------------------------------------------------------------------------------
-if [ "$AUTO_CONFIRM" = false ]; then
-  echo ""
-  read -r -p "Proceed with package manager installation and configuration? [y/N] " resp
-  case "$resp" in
-    [yY][eE][sS]|[yY]) ;;
-    *) echo "Aborted by user."; exit 0 ;;
+  case "$DISTRO_FAMILY" in
+    fedora) PKG_MGR="dnf" ;;
+    suse)   PKG_MGR="zypper" ;;
+    arch)   PKG_MGR="pacman" ;;
+    debian) PKG_MGR="apt" ;;
   esac
 fi
 
-deploy_config() {
-  local target="$1"
-  local template="$2"
+echo "======================================================================"
+echo " Terminal Environment Audit (vendor-official package managers)"
+echo "======================================================================"
+echo "[*] OS:           $OS_TYPE ($(uname -m))"
+echo "[*] Distribution: $DISTRO (family: $DISTRO_FAMILY)"
+echo "[*] Package Mgr:  $PKG_MGR"
+echo "[*] Login Shell:  ${SHELL:-unknown}"
+[ "$DRY_RUN" = true ] && echo "[*] Dry run:      commands are printed, not executed"
 
-  if [ ! -f "$target" ]; then
-    if [ -f "$template" ]; then
-      echo "[+] Deploying $target from template..."
-      mkdir -p "$(dirname "$target")"
-      cp "$template" "$target"
-    else
-      echo "[-] Template $template not found."
+# ------------------------------------------------------------------------------
+# 2. Audit
+# ------------------------------------------------------------------------------
+CONFIG_PAIRS=(
+  "$HOME/.bash_profile|bash_profile.template"
+  "$HOME/.bashrc|bashrc.template"
+  "$HOME/.zprofile|zprofile.template"
+  "$HOME/.zshrc|zshrc.template"
+  "$HOME/.config/ghostty/config|ghostty.config.template"
+  "$HOME/.config/starship.toml|starship.toml.template"
+  "$HOME/.config/fastfetch/config.jsonc|fastfetch.jsonc.template"
+)
+
+ghostty_bin() {
+  local app
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    for app in "/Applications/Ghostty.app" "$HOME/Applications/Ghostty.app"; do
+      if [ -x "$app/Contents/MacOS/ghostty" ]; then
+        echo "$app/Contents/MacOS/ghostty"
+        return 0
+      fi
+    done
+    return 1
+  fi
+  command -v ghostty
+}
+
+has_ghostty() {
+  ghostty_bin &>/dev/null && return 0
+  [ "$OS_TYPE" = "Linux" ] && command -v flatpak &>/dev/null &&
+    flatpak info com.mitchellh.ghostty &>/dev/null
+}
+
+find_plugin() {
+  local name="$1" p
+  for p in \
+    "${HOMEBREW_PREFIX:-/opt/homebrew}/share/$name/$name.zsh" \
+    "/usr/local/share/$name/$name.zsh" \
+    "/home/linuxbrew/.linuxbrew/share/$name/$name.zsh" \
+    "/usr/share/$name/$name.zsh" \
+    "/usr/share/zsh/plugins/$name/$name.zsh" \
+    "$HOME/.zsh/$name/$name.zsh"; do
+    if [ -f "$p" ]; then
+      echo "$p"
+      return 0
     fi
-  else
-    echo "[*] Keeping existing: $target"
+  done
+  return 1
+}
+
+# Prints "nerd", "plain" or nothing.
+font_status() {
+  local f
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    for f in "$HOME"/Library/Fonts/JetBrainsMono*Nerd* /Library/Fonts/JetBrainsMono*Nerd*; do
+      if [ -e "$f" ]; then
+        echo "nerd"
+        return 0
+      fi
+    done
+    return 0
+  fi
+  command -v fc-list &>/dev/null || return 0
+  if fc-list 2>/dev/null | grep -qi "JetBrainsMono Nerd Font"; then
+    echo "nerd"
+  elif fc-list 2>/dev/null | grep -qi "JetBrains Mono"; then
+    echo "plain"
   fi
 }
 
+MISSING=()
+
+audit() {
+  MISSING=()
+  local tool path pair target template font
+
+  echo ""
+  echo "--> Terminal emulator"
+  if has_ghostty; then
+    echo "[+] ghostty: $(ghostty_bin 2>/dev/null || echo 'flatpak com.mitchellh.ghostty')"
+  else
+    echo "[-] ghostty: missing"
+    MISSING+=(ghostty)
+  fi
+
+  echo ""
+  echo "--> Shells & CLI tools"
+  for tool in bash zsh eza starship fastfetch; do
+    if path="$(command -v "$tool")"; then
+      echo "[+] $tool: $path"
+    else
+      echo "[-] $tool: missing"
+      MISSING+=("$tool")
+    fi
+  done
+
+  echo ""
+  echo "--> Zsh plugins"
+  for tool in zsh-autosuggestions zsh-syntax-highlighting; do
+    if path="$(find_plugin "$tool")"; then
+      echo "[+] $tool: $path"
+    else
+      echo "[-] $tool: missing"
+      MISSING+=("$tool")
+    fi
+  done
+
+  echo ""
+  echo "--> Font"
+  font="$(font_status)"
+  case "$font" in
+    nerd)  echo "[+] JetBrainsMono Nerd Font: installed" ;;
+    plain) echo "[+] JetBrains Mono: installed (no Nerd glyphs outside Ghostty; see SKILL.md)" ;;
+    *)     echo "[-] JetBrains Mono font: missing"; MISSING+=(font) ;;
+  esac
+
+  echo ""
+  echo "--> Config files"
+  CONFIGS_DIFFER=()
+  for pair in "${CONFIG_PAIRS[@]}"; do
+    target="${pair%%|*}"
+    template="$ASSETS_DIR/${pair#*|}"
+    if [ ! -f "$target" ]; then
+      echo "[-] missing:  $target"
+      MISSING+=("$target")
+    elif cmp -s "$target" "$template"; then
+      echo "[+] current:  $target"
+    else
+      echo "[~] differs:  $target (kept; --diff to view, --update-configs to replace)"
+      CONFIGS_DIFFER+=("$pair")
+      if [ "$SHOW_DIFF" = true ]; then
+        diff -u "$target" "$template" || true
+      fi
+    fi
+  done
+
+  if path="$(ghostty_bin 2>/dev/null)" && [ -f "$HOME/.config/ghostty/config" ]; then
+    if "$path" +validate-config --config-file="$HOME/.config/ghostty/config" &>/dev/null; then
+      echo "[+] ghostty config validates"
+    else
+      echo "[-] ghostty config fails validation (run: ghostty +validate-config)"
+      MISSING+=("valid ghostty config")
+    fi
+  fi
+}
+
+CONFIGS_DIFFER=()
+audit
+
 echo ""
 echo "======================================================================"
-echo " Step 1: Install & Configure Ghostty Terminal Emulator First"
-echo " (Vendor official repo / maintainer endorsed)"
-echo "======================================================================"
-if [ "$HAS_GHOSTTY" = false ]; then
+if [ ${#MISSING[@]} -eq 0 ] && { [ "$UPDATE_CONFIGS" = false ] || [ ${#CONFIGS_DIFFER[@]} -eq 0 ]; }; then
+  echo "[OK] Terminal environment is complete."
+  exit 0
+fi
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "[!] Missing: ${MISSING[*]}"
+fi
+
+if [ "$MODE" != "apply" ]; then
+  echo "Audit only. To install/deploy the missing pieces run:"
+  echo "  $0 --apply"
+  exit 1
+fi
+
+# ------------------------------------------------------------------------------
+# 3. Apply
+# ------------------------------------------------------------------------------
+if [ "$PKG_MGR" = "none" ]; then
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    echo "[-] Homebrew is required on macOS. Install it from https://brew.sh, then re-run." >&2
+  else
+    echo "[-] Unsupported distribution '$DISTRO' (family: $DISTRO_FAMILY)." >&2
+    echo "    Supported: macOS, Fedora, openSUSE, Debian/Ubuntu, Arch." >&2
+  fi
+  exit 2
+fi
+
+if [ "$AUTO_CONFIRM" = false ] && [ "$DRY_RUN" = false ]; then
+  if [ ! -t 0 ]; then
+    echo "[-] No TTY to confirm on. Get the user's approval, then re-run with -y." >&2
+    exit 2
+  fi
+  read -r -p "Proceed with installation and configuration? [y/N] " resp
+  case "$resp" in
+    [yY][eE][sS]|[yY]) ;;
+    *) echo "Aborted by user."; exit 1 ;;
+  esac
+fi
+
+is_missing() {
+  local item
+  for item in ${MISSING[@]+"${MISSING[@]}"}; do
+    [ "$item" = "$1" ] && return 0
+  done
+  return 1
+}
+
+pkg_available_apt() { apt-cache show "$1" &>/dev/null; }
+
+deploy_config() {
+  local target="$1" template="$2"
+  if [ ! -f "$template" ]; then
+    echo "[-] Template not found: $template"
+    return 1
+  fi
+  if [ ! -f "$target" ]; then
+    echo "[+] Deploying $target"
+    run mkdir -p "$(dirname "$target")" && run cp "$template" "$target"
+  elif [ "$UPDATE_CONFIGS" = true ] && ! cmp -s "$target" "$template"; then
+    local backup
+    backup="$target.bak-$(date +%Y%m%d%H%M%S)"
+    echo "[+] Replacing $target (backup: $backup)"
+    run cp -p "$target" "$backup" && run cp "$template" "$target"
+  fi
+}
+
+add_eza_apt_repo() {
+  # Per https://github.com/eza-community/eza/blob/main/INSTALL.md
+  as_root apt-get install -y gpg wget || return 1
+  as_root mkdir -p /etc/apt/keyrings || return 1
+  as_root sh -c 'wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | gpg --dearmor --yes -o /etc/apt/keyrings/gierens.gpg' || return 1
+  as_root sh -c 'echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" > /etc/apt/sources.list.d/gierens.list' || return 1
+  as_root chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list || return 1
+  as_root apt-get update
+}
+
+echo ""
+echo "--> Step 1: Ghostty"
+if is_missing ghostty; then
   case "$PKG_MGR" in
-    brew)
-      # macOS: Official vendor cask endorsed in Ghostty documentation
-      echo "--> Installing Ghostty via official Homebrew cask..."
-      brew install --cask ghostty
-      ;;
-    pacman)
-      # Arch Linux: Official [extra] repository package
-      echo "--> Installing Ghostty via pacman [extra]..."
-      $SUDO_CMD pacman -S --noconfirm ghostty
-      ;;
+    brew)   try "install ghostty" run brew install --cask ghostty ;;
+    pacman) try "install ghostty" as_root pacman -S --needed --noconfirm ghostty ;;
     dnf)
-      # Fedora: Official Ghostty doc recommends scottames/ghostty COPR
-      echo "--> Enabling vendor-recommended Ghostty COPR (scottames/ghostty)..."
-      $SUDO_CMD dnf copr enable -y scottames/ghostty
-      $SUDO_CMD dnf install -y ghostty
+      try "enable ghostty COPR" as_root dnf copr enable -y scottames/ghostty
+      try "install ghostty" as_root dnf install -y ghostty
       ;;
-    zypper)
-      # openSUSE: Official OSS / X11:terminals repository
-      echo "--> Installing Ghostty via zypper..."
-      $SUDO_CMD zypper --non-interactive install ghostty || true
-      ;;
+    zypper) try "install ghostty" as_root zypper --non-interactive install ghostty ;;
     apt)
-      # Debian / Ubuntu
-      if apt-cache show ghostty &>/dev/null; then
-        echo "--> Installing Ghostty via apt repository..."
-        $SUDO_CMD apt-get install -y ghostty
+      if pkg_available_apt ghostty; then
+        try "install ghostty" as_root apt-get install -y ghostty
       elif command -v flatpak &>/dev/null; then
-        echo "--> Installing Ghostty via Flathub (official packaging)..."
-        flatpak install -y flathub com.mitchellh.ghostty
+        try "install ghostty (flathub)" run flatpak install -y flathub com.mitchellh.ghostty
       else
-        echo "[*] For Debian/Ubuntu, Ghostty documentation recommends installing via"
-        echo "    the official vendor .deb package from https://github.com/ghostty-org/ghostty/releases"
+        manual "Install Ghostty for Debian/Ubuntu following https://ghostty.org/docs/install/binary"
       fi
       ;;
   esac
 fi
-
-mkdir -p "$HOME/.config/ghostty"
-deploy_config "$HOME/.config/ghostty/config" "$RESOURCES_DIR/ghostty.config.template"
+try "deploy ghostty config" deploy_config "$HOME/.config/ghostty/config" "$ASSETS_DIR/ghostty.config.template"
 
 echo ""
-echo "======================================================================"
-echo " Step 2: Setup & Configure Bash Environment (Immediate Parity)"
-echo "======================================================================"
-deploy_config "$HOME/.bash_profile" "$RESOURCES_DIR/bash_profile.template"
-deploy_config "$HOME/.bashrc" "$RESOURCES_DIR/bashrc.template"
-echo "[+] Bash environment configured with eza aliases, history, and Starship support."
+echo "--> Step 2: Bash configuration"
+try "deploy ~/.bash_profile" deploy_config "$HOME/.bash_profile" "$ASSETS_DIR/bash_profile.template"
+try "deploy ~/.bashrc" deploy_config "$HOME/.bashrc" "$ASSETS_DIR/bashrc.template"
 
 echo ""
-echo "======================================================================"
-echo " Step 3: Install & Configure Zsh Shell"
-echo "======================================================================"
-if [ "$ZSH_INSTALLED" = false ]; then
-  echo "--> Installing Zsh via official distribution package manager..."
+echo "--> Step 3: Zsh"
+if is_missing zsh; then
   case "$PKG_MGR" in
-    apt)    $SUDO_CMD apt-get update && $SUDO_CMD apt-get install -y zsh ;;
-    dnf)    $SUDO_CMD dnf install -y zsh ;;
-    zypper) $SUDO_CMD zypper --non-interactive install zsh ;;
-    pacman) $SUDO_CMD pacman -S --noconfirm zsh ;;
-    brew)   brew install zsh ;;
-    *)      echo "[-] Please install zsh manually." ;;
+    brew)   try "install zsh" run brew install zsh ;;
+    apt)    try "install zsh" as_root apt-get install -y zsh ;;
+    dnf)    try "install zsh" as_root dnf install -y zsh ;;
+    zypper) try "install zsh" as_root zypper --non-interactive install zsh ;;
+    pacman) try "install zsh" as_root pacman -S --needed --noconfirm zsh ;;
   esac
 fi
-
-deploy_config "$HOME/.zprofile" "$RESOURCES_DIR/zprofile.template"
-deploy_config "$HOME/.zshrc" "$RESOURCES_DIR/zshrc.template"
-echo "[+] Zsh environment configured."
+try "deploy ~/.zprofile" deploy_config "$HOME/.zprofile" "$ASSETS_DIR/zprofile.template"
+try "deploy ~/.zshrc" deploy_config "$HOME/.zshrc" "$ASSETS_DIR/zshrc.template"
 
 echo ""
-echo "======================================================================"
-echo " Step 4: Install Core CLI Tools via Official Vendor Repositories"
-echo "======================================================================"
+echo "--> Step 4: CLI tools, plugins & font"
 case "$PKG_MGR" in
   brew)
-    # macOS / Linux Homebrew: Official bottles
-    MISSING_BREW=()
-    ! check_tool eza &>/dev/null && MISSING_BREW+=(eza)
-    ! check_tool starship &>/dev/null && MISSING_BREW+=(starship)
-    ! check_tool fastfetch &>/dev/null && MISSING_BREW+=(fastfetch)
-    ! find_plugin "zsh-autosuggestions" &>/dev/null && MISSING_BREW+=(zsh-autosuggestions)
-    ! find_plugin "zsh-syntax-highlighting" &>/dev/null && MISSING_BREW+=(zsh-syntax-highlighting)
-
-    if [ ${#MISSING_BREW[@]} -gt 0 ]; then
-      echo "--> Installing missing formulas via Homebrew: ${MISSING_BREW[*]}..."
-      brew install "${MISSING_BREW[@]}"
-    fi
+    FORMULAS=()
+    for item in eza starship fastfetch zsh-autosuggestions zsh-syntax-highlighting; do
+      if is_missing "$item"; then FORMULAS+=("$item"); fi
+    done
+    if [ ${#FORMULAS[@]} -gt 0 ]; then try "brew install ${FORMULAS[*]}" run brew install "${FORMULAS[@]}"; fi
+    if is_missing font; then try "install font" run brew install --cask font-jetbrains-mono-nerd-font; fi
     ;;
 
   dnf)
-    # Fedora:
-    # - eza: official Fedora core repos
-    # - fastfetch: official Fedora core repos
-    # - starship: official starship.rs doc recommends COPR atim/starship
-    # - zsh plugins: official Fedora core repos
-    $SUDO_CMD dnf install -y zsh-autosuggestions zsh-syntax-highlighting eza fastfetch || true
-
-    if ! check_tool starship &>/dev/null; then
-      echo "--> Enabling official Starship COPR (atim/starship) per starship.rs docs..."
-      $SUDO_CMD dnf copr enable -y atim/starship
-      $SUDO_CMD dnf install -y starship
+    # eza, fastfetch, plugins, font: Fedora repos. starship: atim/starship COPR (starship.rs docs).
+    PKGS=()
+    for item in eza fastfetch zsh-autosuggestions zsh-syntax-highlighting; do
+      if is_missing "$item"; then PKGS+=("$item"); fi
+    done
+    if is_missing font; then PKGS+=(jetbrains-mono-fonts-all); fi
+    if [ ${#PKGS[@]} -gt 0 ]; then try "dnf install ${PKGS[*]}" as_root dnf install -y "${PKGS[@]}"; fi
+    if is_missing starship; then
+      try "enable starship COPR" as_root dnf copr enable -y atim/starship
+      try "install starship" as_root dnf install -y starship
     fi
     ;;
 
   zypper)
-    # openSUSE:
-    # - eza, starship, fastfetch, zsh plugins are in official openSUSE OSS repos
-    echo "--> Installing packages via zypper (openSUSE official OSS)..."
-    $SUDO_CMD zypper --non-interactive install \
-      eza starship fastfetch zsh-autosuggestions zsh-syntax-highlighting || true
-    ;;
-
-  apt)
-    # Debian / Ubuntu:
-    $SUDO_CMD apt-get update
-    $SUDO_CMD apt-get install -y zsh-autosuggestions zsh-syntax-highlighting
-
-    # eza: Official eza-community apt repository (gierens.de) per eza INSTALL.md
-    if ! check_tool eza &>/dev/null; then
-      if apt-cache show eza &>/dev/null; then
-        $SUDO_CMD apt-get install -y eza
-      else
-        echo "--> Adding official eza vendor repository (deb.gierens.de)..."
-        $SUDO_CMD apt-get install -y gpg wget
-        $SUDO_CMD mkdir -p /etc/apt/keyrings
-        wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | $SUDO_CMD gpg --dearmor -o /etc/apt/keyrings/gierens.gpg
-        echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" | $SUDO_CMD tee /etc/apt/sources.list.d/gierens.list
-        $SUDO_CMD chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list
-        $SUDO_CMD apt-get update
-        $SUDO_CMD apt-get install -y eza
-      fi
-    fi
-
-    # fastfetch: Official vendor PPA (zhangsongcui3371) or native package per fastfetch docs
-    if ! check_tool fastfetch &>/dev/null; then
-      if apt-cache show fastfetch &>/dev/null; then
-        $SUDO_CMD apt-get install -y fastfetch
-      elif command -v add-apt-repository &>/dev/null; then
-        echo "--> Adding official Fastfetch PPA (ppa:zhangsongcui3371/fastfetch)..."
-        $SUDO_CMD add-apt-repository -y ppa:zhangsongcui3371/fastfetch
-        $SUDO_CMD apt-get update
-        $SUDO_CMD apt-get install -y fastfetch
-      fi
-    fi
-
-    # starship: Native apt or official starship.rs installer
-    if ! check_tool starship &>/dev/null; then
-      if apt-cache show starship &>/dev/null; then
-        $SUDO_CMD apt-get install -y starship
-      else
-        echo "--> Installing Starship via official starship.rs vendor script..."
-        curl -sS https://starship.rs/install.sh | sh -s -- -y
-      fi
-    fi
+    PKGS=()
+    for item in eza starship fastfetch zsh-autosuggestions zsh-syntax-highlighting; do
+      if is_missing "$item"; then PKGS+=("$item"); fi
+    done
+    if is_missing font; then PKGS+=(jetbrains-mono-fonts); fi
+    if [ ${#PKGS[@]} -gt 0 ]; then try "zypper install ${PKGS[*]}" as_root zypper --non-interactive install "${PKGS[@]}"; fi
     ;;
 
   pacman)
-    # Arch Linux: Official [extra] repos
-    echo "--> Installing packages via pacman..."
-    $SUDO_CMD pacman -S --noconfirm eza starship fastfetch zsh-autosuggestions zsh-syntax-highlighting || true
+    PKGS=()
+    for item in eza starship fastfetch zsh-autosuggestions zsh-syntax-highlighting; do
+      if is_missing "$item"; then PKGS+=("$item"); fi
+    done
+    if is_missing font; then PKGS+=(ttf-jetbrains-mono-nerd); fi
+    if [ ${#PKGS[@]} -gt 0 ]; then try "pacman install ${PKGS[*]}" as_root pacman -S --needed --noconfirm "${PKGS[@]}"; fi
+    ;;
+
+  apt)
+    try "apt-get update" as_root apt-get update
+    PKGS=()
+    for item in zsh-autosuggestions zsh-syntax-highlighting; do
+      if is_missing "$item"; then PKGS+=("$item"); fi
+    done
+    if is_missing font; then PKGS+=(fonts-jetbrains-mono); fi
+    if [ ${#PKGS[@]} -gt 0 ]; then try "apt install ${PKGS[*]}" as_root apt-get install -y "${PKGS[@]}"; fi
+
+    if is_missing eza; then
+      if pkg_available_apt eza; then
+        try "install eza" as_root apt-get install -y eza
+      else
+        try "add eza vendor repo (deb.gierens.de)" add_eza_apt_repo
+        try "install eza" as_root apt-get install -y eza
+      fi
+    fi
+
+    if is_missing fastfetch; then
+      if pkg_available_apt fastfetch; then
+        try "install fastfetch" as_root apt-get install -y fastfetch
+      elif command -v add-apt-repository &>/dev/null; then
+        try "add fastfetch PPA" as_root add-apt-repository -y ppa:zhangsongcui3371/fastfetch
+        try "install fastfetch" as_root apt-get install -y fastfetch
+      else
+        manual "Install fastfetch from https://github.com/fastfetch-cli/fastfetch/releases (.deb)"
+      fi
+    fi
+
+    if is_missing starship; then
+      if pkg_available_apt starship; then
+        try "install starship" as_root apt-get install -y starship
+      else
+        manual "Starship has no apt package before Debian 13 / Ubuntu 25.04; install per https://starship.rs/guide/"
+      fi
+    fi
     ;;
 esac
 
-# Deploy shared configuration templates
-mkdir -p "$HOME/.config/fastfetch"
-deploy_config "$HOME/.config/starship.toml" "$RESOURCES_DIR/starship.toml.template"
-deploy_config "$HOME/.config/fastfetch/config.jsonc" "$RESOURCES_DIR/fastfetch.jsonc.template"
+echo ""
+echo "--> Step 5: Shared configs"
+try "deploy starship.toml" deploy_config "$HOME/.config/starship.toml" "$ASSETS_DIR/starship.toml.template"
+try "deploy fastfetch config" deploy_config "$HOME/.config/fastfetch/config.jsonc" "$ASSETS_DIR/fastfetch.jsonc.template"
 
-# ------------------------------------------------------------------------------
-# 9. Shell Switch Guidance
-# ------------------------------------------------------------------------------
-if command -v zsh &>/dev/null; then
-  ZSH_BIN="$(command -v zsh)"
-  if [ "${SHELL:-}" != "$ZSH_BIN" ]; then
-    echo ""
-    echo "[*] Notice: Current login shell is '$SHELL'."
-    echo "    To set Zsh as your default shell, run:"
-    echo "      chsh -s \"$ZSH_BIN\""
-  fi
+if command -v zsh &>/dev/null && [ "${SHELL:-}" != "$(command -v zsh)" ] && [ "${SHELL:-}" != "/bin/zsh" ]; then
+  echo ""
+  echo "[*] Login shell is '${SHELL:-unknown}'. To switch to Zsh (asks for your password):"
+  echo "      chsh -s \"$(command -v zsh)\""
 fi
 
+# ------------------------------------------------------------------------------
+# 4. Verify
+# ------------------------------------------------------------------------------
 echo ""
-echo "[+] Modern terminal setup successfully applied via official vendor package managers!"
+echo "======================================================================"
+if [ "$DRY_RUN" = true ]; then
+  echo "[*] Dry run complete; nothing was changed."
+  exit 0
+fi
+
+hash -r
+UPDATE_CONFIGS=false
+SHOW_DIFF=false
+echo " Verification"
+audit
+echo ""
+echo "======================================================================"
+for step in ${FAILED_STEPS[@]+"${FAILED_STEPS[@]}"}; do echo "[!] Failed step: $step"; done
+for step in ${MANUAL_STEPS[@]+"${MANUAL_STEPS[@]}"}; do echo "[*] Manual step: $step"; done
+if [ ${#MISSING[@]} -eq 0 ] && [ ${#FAILED_STEPS[@]} -eq 0 ]; then
+  echo "[OK] Terminal environment applied and verified."
+  exit 0
+fi
+[ ${#MISSING[@]} -gt 0 ] && echo "[!] Still missing: ${MISSING[*]}"
+exit 1

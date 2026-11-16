@@ -84,6 +84,7 @@ for _s in \
   "${HOMEBREW_PREFIX:-/opt/homebrew}/share/zsh-autosuggestions/zsh-autosuggestions.zsh" \
   "/usr/local/share/zsh-autosuggestions/zsh-autosuggestions.zsh" \
   "/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh" \
+  "/usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh" \
   "$HOME/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh"; do
   if [[ -f "$_s" ]]; then
     source "$_s"
@@ -98,6 +99,7 @@ for _s in \
   "${HOMEBREW_PREFIX:-/opt/homebrew}/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" \
   "/usr/local/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" \
   "/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" \
+  "/usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" \
   "$HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"; do
   if [[ -f "$_s" ]]; then
     source "$_s"

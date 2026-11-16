@@ -1,0 +1,14 @@
+{
+  "name": "setup-agent",
+  "description": "Workstation setup skills: Ghostty terminal, Bash/Zsh, Starship and a matching VS Code.",
+  "owner": {
+    "name": "Konstantin Boev"
+  },
+  "plugins": [
+    {
+      "name": "setup-agent",
+      "source": "./",
+      "description": "Terminal (Ghostty, Zsh, Starship) and VS Code workstation setup skills."
+    }
+  ]
+}

@@ -1,97 +1,73 @@
 ---
 name: terminal-setup
 description: >-
-  Use this skill to configure, audit, maintain, or replicate the modern terminal
-  environment across macOS and Linux (Debian, Ubuntu, Fedora, openSUSE, Arch).
-  Supports both Bash and Zsh with full feature parity. Installs Ghostty first,
-  sets up Bash for immediate usability, then installs and configures Zsh and CLI tools
-  (Starship, eza, Fastfetch, plugins) using official vendor-maintained package manager repositories.
+  Audits, installs, or repairs a modern terminal environment on macOS and Linux
+  (Fedora, openSUSE, Debian/Ubuntu, Arch): Ghostty, Bash and Zsh with feature
+  parity, Starship prompt, eza, Fastfetch, zsh-autosuggestions,
+  zsh-syntax-highlighting, and the JetBrains Mono Nerd Font, using only
+  vendor-official package repositories. Use when the user wants to set up a new
+  machine, bootstrap or check their dotfiles, fix their shell prompt or
+  terminal, or sync terminal configs to the canonical templates.
+license: MIT
+compatibility: macOS (Homebrew) or Linux with dnf, zypper, apt or pacman; bash 3.2+; sudo on Linux for installs.
+metadata:
+  repository: https://github.com/Hazurka/setup-agent
 ---
 
-# Multi-Platform Terminal Setup Skill (Vendor Package Manager Driven)
+# Terminal Setup
 
-This skill provides an automated, cross-platform procedure for configuring, inspecting, and deploying a modern terminal environment across **macOS** and **Linux distributions** (openSUSE, Fedora, Debian, Ubuntu, Arch).
+Sets up Ghostty, Bash/Zsh, Starship, eza, Fastfetch, the Zsh plugins and the JetBrains Mono font. Everything is done by one script; all paths below are relative to this skill's directory.
 
-## Core Principle: Official Vendor Package Repositories Only
+## Workflow
 
-All tools must be installed through the **distribution's native package manager** (`brew`, `zypper`, `dnf`, `apt`, `pacman`) using repositories maintained directly by the **official vendor/maintainer**:
-1. Keeps the environment fully robust, auditable, and cleanly registered in the system package database.
-2. Allows universal updates with the standard OS update flow (`brew upgrade`, `dnf upgrade`, `zypper update`, `apt upgrade`).
-3. Eliminates random unversioned binary downloads or untracked scripts.
+1. **Audit first** (read-only, always safe):
+   ```bash
+   bash scripts/verify-or-install.sh --check
+   ```
+   Exit code 0 means complete; 1 means something is missing. Lines start with `[+]` ok, `[-]` missing, `[~]` config exists but differs from the template.
 
----
+2. **Show the user what is missing and get approval** before changing anything. To show exactly what would run:
+   ```bash
+   bash scripts/verify-or-install.sh --apply --dry-run
+   ```
 
-## Official Vendor Documentation & Repository Matrix
+3. **Apply** after approval. Agents have no TTY, so pass `-y`:
+   ```bash
+   bash scripts/verify-or-install.sh --apply -y
+   ```
+   The script re-audits at the end and exits non-zero if anything is still missing, listing failed and manual steps. Report those to the user verbatim.
 
-Tool & Vendor               | macOS (`brew`)           | Fedora (`dnf`)                                       | openSUSE (`zypper`)               | Debian / Ubuntu (`apt`)
-:-------------------------- | :----------------------- | :--------------------------------------------------- | :-------------------------------- | :----------------------
-**Ghostty**<br>*(ghostty.org)* | `brew install --cask ghostty` | `dnf copr enable scottames/ghostty`<br>*(Official Ghostty doc)* | `zypper in ghostty`<br>*(Official openSUSE OSS)* | Native package (26.04+) or official vendor `.deb` / Flathub
-**Starship**<br>*(starship.rs)* | `brew install starship` | `dnf copr enable atim/starship`<br>*(Official Starship doc)* | `zypper in starship`<br>*(Official openSUSE OSS)* | `apt install starship` (Debian 13+ / Ubuntu 25.04+)
-**eza**<br>*(eza-community)* | `brew install eza`      | `dnf install eza`<br>*(Official Fedora core)*        | `zypper in eza`<br>*(Official openSUSE OSS)*      | Official vendor repo `deb.gierens.de`<br>*(eza INSTALL.md)*
-**Fastfetch**<br>*(fastfetch-cli)* | `brew install fastfetch`| `dnf install fastfetch`<br>*(Official Fedora core)*  | `zypper in fastfetch`<br>*(Official openSUSE OSS)*| Native package or author's official PPA (`ppa:zhangsongcui3371/fastfetch`)
-**Zsh & Plugins**<br>*(zsh-users)* | `brew install zsh ...`  | `dnf install zsh ...`<br>*(Official Fedora core)*    | `zypper in zsh ...`<br>*(Official openSUSE OSS)*  | `apt install zsh ...`<br>*(Official Debian/Ubuntu core)*
+## Rules
 
----
+- **Existing configs are never overwritten by default.** Missing ones are deployed from `assets/`. Use `--check --diff` to show differences. Only pass `--update-configs` when the user explicitly asks to replace their configs; each replaced file is backed up as `<file>.bak-<timestamp>`.
+- **Linux installs need sudo.** If `sudo` would prompt for a password, ask the user to run `sudo -v` in their terminal first (in Claude Code: `! sudo -v`), or have them run the apply command themselves.
+- **macOS needs Homebrew.** If it is missing the script stops and points to https://brew.sh; do not install Homebrew without the user's approval.
+- Never replace a vendor package step with `curl | sh`. Where no vendor package exists (e.g. Starship on Debian 12), the script prints a manual step; relay it.
+- Changing the login shell (`chsh`) needs the user's password; tell the user the command, don't run it.
 
-## Execution Sequence
+## Package sources
 
-```mermaid
-flowchart TD
-    A["1. Pre-flight Audit (--check)"] --> B["2. Install Ghostty First (Vendor Cask/Package)"]
-    B --> C["3. Setup & Configure Bash (~/.bashrc, ~/.bash_profile)"]
-    C --> D{"Is Zsh installed?"}
-    D -- No --> E["Install Zsh (via native package manager)"]
-    D -- Yes --> F["Configure Zsh (~/.zshrc, ~/.zprofile)"]
-    E --> F
-    F --> G["4. Install CLI Tools (via vendor-official repositories)"]
-    G --> H["5. Deploy Shared Configs (starship.toml, ghostty config, fastfetch.jsonc)"]
-```
+Tool | macOS | Fedora | openSUSE | Debian / Ubuntu | Arch
+:-- | :-- | :-- | :-- | :-- | :--
+Ghostty | cask `ghostty` | COPR `scottames/ghostty` | OSS | apt (if packaged), else Flathub, else manual | extra
+Starship | `starship` | COPR `atim/starship` | OSS | apt (Debian 13+ / Ubuntu 25.04+), else manual | extra
+eza | `eza` | Fedora | OSS | apt, else vendor repo `deb.gierens.de` | extra
+Fastfetch | `fastfetch` | Fedora | OSS | apt, else PPA `zhangsongcui3371/fastfetch` | extra
+Zsh + plugins | brew | Fedora | OSS | apt | extra
+Font | cask `font-jetbrains-mono-nerd-font` | `jetbrains-mono-fonts-all` | `jetbrains-mono-fonts` | `fonts-jetbrains-mono` | `ttf-jetbrains-mono-nerd`
 
-1. **Pre-flight Audit**: Inspects system architecture, package manager, installed shells, tools, and configs.
-2. **Ghostty Installed First**: Deploys Ghostty and validates `~/.config/ghostty/config`.
-3. **Bash Configured First**: Deploys `~/.bashrc` and `~/.bash_profile` so the user immediately gets `eza` aliases and Starship prompt capabilities even before Zsh is installed.
-4. **Zsh Installed & Configured**: If Zsh is not present, it installs it via the platform package manager and deploys `~/.zshrc` / `~/.zprofile`.
-5. **CLI Tools & Shared Configurations**: Installs `eza`, `starship`, `fastfetch`, and plugins from vendor repos, deploying `~/.config/starship.toml` and `~/.config/fastfetch/config.jsonc`.
+On Fedora, openSUSE and Debian/Ubuntu the distro font is plain JetBrains Mono. Ghostty bundles Nerd Font symbols, so the terminal is fine. VS Code's integrated terminal will lack prompt icons unless the user installs the Nerd Font from https://github.com/ryanoasis/nerd-fonts/releases.
 
----
+RHEL-family systems (Rocky, Alma, CentOS) are reported as unsupported because the COPRs above are Fedora-only.
 
-## Commands for Agents
+## Files deployed
 
-### 1. Audit / Inspection Mode (Safe, Read-Only)
-```bash
-~/.agents/skills/terminal-setup/scripts/verify-or-install.sh --check
-```
+Template (`assets/`) | Target
+:-- | :--
+`bash_profile.template`, `bashrc.template` | `~/.bash_profile`, `~/.bashrc`
+`zprofile.template`, `zshrc.template` | `~/.zprofile`, `~/.zshrc`
+`ghostty.config.template` | `~/.config/ghostty/config`
+`starship.toml.template` | `~/.config/starship.toml`
+`fastfetch.jsonc.template` | `~/.config/fastfetch/config.jsonc`
 
-### 2. Apply Mode
-```bash
-# Interactive (prompts before applying):
-~/.agents/skills/terminal-setup/scripts/verify-or-install.sh --apply
-
-# Automated non-interactive mode:
-~/.agents/skills/terminal-setup/scripts/verify-or-install.sh --apply -y
-```
-
----
-
-## Developer Environment & Prompt Modules
-
-Starship prompt dynamically activates developer modules based on project context:
-- **Application Package Version (`󰏗`)**: Reads the application version directly from `package.json` (with `display_private = true` so private applications are supported).
-- **React (``)**: Distinct React atom glyph in cyan (`#89dceb`), triggered when React/Next.js dependencies exist in `package.json`.
-- **Angular (``)**: Distinct Angular shield glyph in red (`#f38ba8`), triggered on `angular.json` or `@angular/*` packages.
-- **Vue.js (`󰡄`)**: Distinct Vue logo in emerald green (`#a6e3a1`).
-- **Node.js (``)**: Node hexagon in green (`#a6e3a1`), displaying active Node version.
-- **Bun (``) & Deno (``)**: Modern JavaScript/TypeScript alternative runtimes.
-- **Go (``)**: Active when inside Go projects (`go.mod`, `go.work`, `*.go`), displaying Go compiler version.
-- **Terraform (`󱁢`)**: Active when inside a directory with `.tf` or `.terraform` files, displaying the current workspace.
-
----
-
-## Canonical Resource Templates
-
-All templates reside in `~/.agents/skills/terminal-setup/resources/`:
-- `bash_profile.template` & `bashrc.template`
-- `zprofile.template` & `zshrc.template`
-- `ghostty.config.template`
-- `starship.toml.template`
-- `fastfetch.jsonc.template`
+The Starship config uses Catppuccin Mocha colours and shows package version, Node/Bun/Deno, React/Angular/Vue, Go and Terraform modules when the current directory is such a project.

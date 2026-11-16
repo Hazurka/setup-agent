@@ -1,241 +1,318 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # verify-or-install.sh (vscode-setup)
-# Multi-platform audit & installation script for VS Code environment.
-# Supported OS: macOS & Linux.
-# Preserves icon theme ("vscode-icons") while synchronizing:
-#   - Catppuccin Mocha theme & palette
-#   - JetBrains Mono Nerd Font typography & coding ligatures
-#   - Terminal font & contrast settings
+# Audit or apply the VS Code setup that matches the Ghostty terminal:
+#   Catppuccin Mocha, JetBrains Mono (Nerd) font with ligatures, vscode-icons,
+#   .env/.gitignore highlighting, Terraform / Go / ESLint / Prettier tooling.
+# settings.json is deep-merged (other settings kept) after a timestamped backup.
+#
+# Exit codes: 0 = complete (after apply: verified complete)
+#             1 = something missing or a step failed
+#             2 = usage / environment error
+# Compatible with macOS /bin/bash 3.2.
 # ==============================================================================
+
+# Helpers below are invoked indirectly through try().
+# shellcheck disable=SC2329
 
 set -euo pipefail
 
 MODE="check"
 AUTO_CONFIRM=false
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOURCES_DIR="$(cd "${SCRIPT_DIR}/../resources" && pwd)"
-
-for arg in "$@"; do
-  case "$arg" in
-    --apply|--install)
-      MODE="apply"
-      ;;
-    -y|--yes)
-      AUTO_CONFIRM=true
-      ;;
-    --check|--audit)
-      MODE="check"
-      ;;
-    -h|--help)
-      echo "Usage: $(basename "$0") [--check|--apply] [-y]"
-      echo "  --check   Audit VS Code setup and report status (default)"
-      echo "  --apply   Install Catppuccin extension and configure settings.json"
-      echo "  -y        Non-interactive mode (automatically confirm prompts)"
-      exit 0
-      ;;
-  esac
-done
-
-echo "======================================================================"
-echo " VS Code Environment Inspector & Installer"
-echo " (Synchronized with Ghostty, Catppuccin Mocha & JetBrains Mono)"
-echo "======================================================================"
-
-OS_TYPE="$(uname -s)"
+DRY_RUN=false
 SETTINGS_PATH=""
 
-if [ "$OS_TYPE" = "Darwin" ]; then
-  SETTINGS_PATH="$HOME/Library/Application Support/Code/User/settings.json"
-else
-  SETTINGS_PATH="$HOME/.config/Code/User/settings.json"
-fi
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--check | --apply] [options]
 
-echo "[*] OS:             $OS_TYPE"
-echo "[*] Settings Path:  $SETTINGS_PATH"
+Modes:
+  --check              Audit only, change nothing (default)
+  --apply              Install missing extensions and merge settings.json
 
-# 1. Check VS Code CLI
-HAS_CODE_CLI=false
-if command -v code &>/dev/null; then
-  echo "[+] VS Code CLI:   found ($(which code))"
-  HAS_CODE_CLI=true
-else
-  echo "[-] VS Code CLI:   not found in PATH"
-fi
+Options:
+  -y, --yes            Do not prompt (required when there is no TTY, e.g. agents)
+  --dry-run            With --apply: print what would change instead of changing it
+  --settings <path>    Use this settings.json instead of auto-detecting
+  -h, --help           Show this help
+EOF
+}
 
-# 2. Check Extensions
-HAS_CATPPUCCIN_EXT=false
-HAS_ICONS_EXT=false
-HAS_TERRAFORM_EXT=false
-HAS_GO_EXT=false
-HAS_ESLINT_EXT=false
-HAS_PRETTIER_EXT=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply|--install) MODE="apply" ;;
+    --check|--audit)   MODE="check" ;;
+    -y|--yes)          AUTO_CONFIRM=true ;;
+    --dry-run)         DRY_RUN=true ;;
+    --settings)
+      [ $# -ge 2 ] || { echo "--settings needs a path" >&2; exit 2; }
+      SETTINGS_PATH="$2"
+      shift
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
 
-if [ "$HAS_CODE_CLI" = true ]; then
-  EXT_LIST="$(code --list-extensions 2>/dev/null || true)"
-  if echo "$EXT_LIST" | grep -qi "Catppuccin.catppuccin-vsc"; then
-    echo "[+] Catppuccin Theme Extension: installed"
-    HAS_CATPPUCCIN_EXT=true
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEMPLATE="$SKILL_DIR/assets/settings.json.template"
+SETTINGS_TOOL="$SKILL_DIR/scripts/vscode_settings.py"
+
+# Test hook: the test-suite uses this to simulate other platforms.
+OS_TYPE="${SETUP_AGENT_OS_TYPE:-$(uname -s)}"
+
+EXTENSIONS=(
+  catppuccin.catppuccin-vsc
+  vscode-icons-team.vscode-icons
+  hashicorp.terraform
+  golang.go
+  dbaeumer.vscode-eslint
+  esbenp.prettier-vscode
+)
+
+FAILED_STEPS=()
+MANUAL_STEPS=()
+
+run() {
+  if [ "$DRY_RUN" = true ]; then
+    echo "  [dry-run] $*"
+    return 0
+  fi
+  "$@"
+}
+
+try() {
+  local label="$1"
+  shift
+  if ! "$@"; then
+    echo "[!] Step failed: $label"
+    FAILED_STEPS+=("$label")
+  fi
+}
+
+manual() {
+  echo "[*] Manual step: $1"
+  MANUAL_STEPS+=("$1")
+}
+
+# ------------------------------------------------------------------------------
+# Locate VS Code (stable, Insiders, Flatpak) and its settings.json
+# ------------------------------------------------------------------------------
+CODE_CLI=()
+
+find_code_cli() {
+  local c
+  CODE_CLI=()
+  for c in code code-insiders; do
+    if command -v "$c" &>/dev/null; then
+      CODE_CLI=("$c")
+      return 0
+    fi
+  done
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    for c in "/Applications/Visual Studio Code.app" "$HOME/Applications/Visual Studio Code.app"; do
+      if [ -x "$c/Contents/Resources/app/bin/code" ]; then
+        CODE_CLI=("$c/Contents/Resources/app/bin/code")
+        return 0
+      fi
+    done
+  elif command -v flatpak &>/dev/null && flatpak info com.visualstudio.code &>/dev/null; then
+    CODE_CLI=(flatpak run com.visualstudio.code)
+    return 0
+  fi
+  return 1
+}
+
+detect_settings_path() {
+  local dir
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    for dir in "$HOME/Library/Application Support/Code" "$HOME/Library/Application Support/Code - Insiders"; do
+      if [ -d "$dir" ]; then
+        echo "$dir/User/settings.json"
+        return
+      fi
+    done
+    echo "$HOME/Library/Application Support/Code/User/settings.json"
   else
-    echo "[-] Catppuccin Theme Extension: missing"
+    for dir in "$HOME/.config/Code" "$HOME/.var/app/com.visualstudio.code/config/Code" "$HOME/.config/Code - Insiders"; do
+      if [ -d "$dir" ]; then
+        echo "$dir/User/settings.json"
+        return
+      fi
+    done
+    echo "$HOME/.config/Code/User/settings.json"
+  fi
+}
+
+[ -n "$SETTINGS_PATH" ] || SETTINGS_PATH="$(detect_settings_path)"
+
+font_installed() {
+  local f
+  if [ "$OS_TYPE" = "Darwin" ]; then
+    for f in "$HOME"/Library/Fonts/JetBrainsMono* /Library/Fonts/JetBrainsMono*; do
+      [ -e "$f" ] && return 0
+    done
+    return 1
+  fi
+  command -v fc-list &>/dev/null && fc-list 2>/dev/null | grep -qi "JetBrains *Mono"
+}
+
+echo "======================================================================"
+echo " VS Code Environment Audit (Catppuccin Mocha + JetBrains Mono)"
+echo "======================================================================"
+echo "[*] OS:            $OS_TYPE"
+echo "[*] settings.json: $SETTINGS_PATH"
+[ "$DRY_RUN" = true ] && echo "[*] Dry run:       commands are printed, not executed"
+
+# ------------------------------------------------------------------------------
+# Audit
+# ------------------------------------------------------------------------------
+MISSING=()
+MISSING_EXTS=()
+SETTINGS_STATE=0
+
+audit() {
+  MISSING=()
+  MISSING_EXTS=()
+  local installed ext
+
+  echo ""
+  echo "--> VS Code"
+  if find_code_cli; then
+    echo "[+] CLI: ${CODE_CLI[*]}"
+  else
+    echo "[-] VS Code CLI not found"
+    MISSING+=(vscode)
   fi
 
-  if echo "$EXT_LIST" | grep -qi "vscode-icons"; then
-    echo "[+] Icon Theme Extension (vscode-icons): preserved & installed"
-    HAS_ICONS_EXT=true
-  else
-    echo "[!] Icon Theme Extension (vscode-icons): missing"
+  if ! command -v python3 &>/dev/null; then
+    echo "[-] python3 not found (needed to merge settings.json)"
+    MISSING+=(python3)
   fi
 
-  if echo "$EXT_LIST" | grep -qi "hashicorp.terraform"; then
-    echo "[+] Terraform Extension (hashicorp.terraform): installed"
-    HAS_TERRAFORM_EXT=true
+  echo ""
+  echo "--> Extensions"
+  if [ ${#CODE_CLI[@]} -gt 0 ]; then
+    installed="$("${CODE_CLI[@]}" --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+    for ext in "${EXTENSIONS[@]}"; do
+      if printf '%s\n' "$installed" | grep -qxF "$ext"; then
+        echo "[+] $ext"
+      else
+        echo "[-] $ext: missing"
+        MISSING_EXTS+=("$ext")
+      fi
+    done
+    if [ ${#MISSING_EXTS[@]} -gt 0 ]; then MISSING+=(extensions); fi
   else
-    echo "[-] Terraform Extension (hashicorp.terraform): missing"
+    echo "[-] skipped (no VS Code CLI)"
+    MISSING_EXTS=("${EXTENSIONS[@]}")
   fi
 
-  if echo "$EXT_LIST" | grep -qi "golang.go"; then
-    echo "[+] Go Extension (golang.go): installed"
-    HAS_GO_EXT=true
-  else
-    echo "[-] Go Extension (golang.go): missing"
+  echo ""
+  echo "--> settings.json"
+  SETTINGS_STATE=0
+  if command -v python3 &>/dev/null; then
+    python3 -I "$SETTINGS_TOOL" check "$SETTINGS_PATH" "$TEMPLATE" || SETTINGS_STATE=$?
+    if [ "$SETTINGS_STATE" -ne 0 ]; then MISSING+=(settings); fi
   fi
 
-  if echo "$EXT_LIST" | grep -qi "dbaeumer.vscode-eslint"; then
-    echo "[+] ESLint Extension (dbaeumer.vscode-eslint): installed"
-    HAS_ESLINT_EXT=true
+  echo ""
+  echo "--> Font"
+  if font_installed; then
+    echo "[+] JetBrains Mono font installed"
   else
-    echo "[-] ESLint Extension (dbaeumer.vscode-eslint): missing"
+    echo "[!] JetBrains Mono font not found; the terminal-setup skill installs it"
   fi
+}
 
-  if echo "$EXT_LIST" | grep -qi "esbenp.prettier-vscode"; then
-    echo "[+] Prettier Extension (esbenp.prettier-vscode): installed"
-    HAS_PRETTIER_EXT=true
-  else
-    echo "[-] Prettier Extension (esbenp.prettier-vscode): missing"
-  fi
-fi
+audit
 
-# 3. Check settings.json
-HAS_SETTINGS_FILE=false
-COLOR_THEME_OK=false
-ICON_THEME_OK=false
-FONT_OK=false
-ASSOCIATIONS_OK=false
-
-if [ -f "$SETTINGS_PATH" ]; then
-  HAS_SETTINGS_FILE=true
-  echo "[+] settings.json found."
-
-  if grep -q '"workbench.colorTheme": *"Catppuccin Mocha"' "$SETTINGS_PATH"; then
-    echo "[+] workbench.colorTheme: Catppuccin Mocha"
-    COLOR_THEME_OK=true
-  else
-    echo "[-] workbench.colorTheme: not set to Catppuccin Mocha"
-  fi
-
-  if grep -q '"workbench.iconTheme": *"vscode-icons"' "$SETTINGS_PATH"; then
-    echo "[+] workbench.iconTheme: vscode-icons (preserved)"
-    ICON_THEME_OK=true
-  else
-    echo "[-] workbench.iconTheme: not set to vscode-icons"
-  fi
-
-  if grep -q "JetBrains" "$SETTINGS_PATH"; then
-    echo "[+] Editor & Terminal Font: JetBrains Mono configured"
-    FONT_OK=true
-  else
-    echo "[-] Editor & Terminal Font: JetBrains Mono not configured"
-  fi
-
-  if grep -q '"\.env\*"' "$SETTINGS_PATH" && grep -q '"\.gitignore\*"' "$SETTINGS_PATH"; then
-    echo "[+] Syntax Highlighting: .env and .gitignore associations configured"
-    ASSOCIATIONS_OK=true
-  else
-    echo "[-] Syntax Highlighting: .env and .gitignore associations missing"
-  fi
-else
-  echo "[-] settings.json not found."
-fi
-
-# 4. Summary
 echo ""
 echo "======================================================================"
-echo " Audit Summary"
-echo "======================================================================"
-
-ALL_OK=true
-[ "$HAS_CATPPUCCIN_EXT" = false ] && ALL_OK=false
-[ "$HAS_TERRAFORM_EXT" = false ] && ALL_OK=false
-[ "$HAS_GO_EXT" = false ] && ALL_OK=false
-[ "$HAS_ESLINT_EXT" = false ] && ALL_OK=false
-[ "$HAS_PRETTIER_EXT" = false ] && ALL_OK=false
-[ "$HAS_SETTINGS_FILE" = false ] && ALL_OK=false
-[ "$COLOR_THEME_OK" = false ] && ALL_OK=false
-[ "$ICON_THEME_OK" = false ] && ALL_OK=false
-[ "$FONT_OK" = false ] && ALL_OK=false
-[ "$ASSOCIATIONS_OK" = false ] && ALL_OK=false
-
-if [ "$ALL_OK" = true ]; then
-  echo "[OK] VS Code styling and developer tooling are fully operational!"
+if [ ${#MISSING[@]} -eq 0 ]; then
+  echo "[OK] VS Code setup is complete."
   exit 0
 fi
-
-echo "[!] VS Code setup needs configuration or missing extensions."
+echo "[!] Missing: ${MISSING[*]}"
 
 if [ "$MODE" != "apply" ]; then
-  echo ""
-  echo "Audit completed. To apply changes, run:"
+  echo "Audit only. To apply, run:"
   echo "  $0 --apply"
-  exit 0
+  exit 1
 fi
 
-# 5. Apply
-if [ "$AUTO_CONFIRM" = false ]; then
-  echo ""
-  read -r -p "Apply VS Code configuration and extensions now? [y/N] " resp
+if [ "$SETTINGS_STATE" -eq 2 ]; then
+  echo "[-] settings.json could not be parsed; fix it by hand before applying." >&2
+  exit 1
+fi
+
+# ------------------------------------------------------------------------------
+# Apply
+# ------------------------------------------------------------------------------
+if [ "$AUTO_CONFIRM" = false ] && [ "$DRY_RUN" = false ]; then
+  if [ ! -t 0 ]; then
+    echo "[-] No TTY to confirm on. Get the user's approval, then re-run with -y." >&2
+    exit 2
+  fi
+  read -r -p "Apply VS Code extensions and settings now? [y/N] " resp
   case "$resp" in
     [yY][eE][sS]|[yY]) ;;
-    *) echo "Aborted by user."; exit 0 ;;
+    *) echo "Aborted by user."; exit 1 ;;
   esac
 fi
 
-if [ "$HAS_CODE_CLI" = true ]; then
-  [ "$HAS_CATPPUCCIN_EXT" = false ] && code --install-extension Catppuccin.catppuccin-vsc
-  [ "$HAS_TERRAFORM_EXT" = false ] && code --install-extension HashiCorp.terraform
-  [ "$HAS_GO_EXT" = false ] && code --install-extension golang.Go
-  [ "$HAS_ESLINT_EXT" = false ] && code --install-extension dbaeumer.vscode-eslint
-  [ "$HAS_PRETTIER_EXT" = false ] && code --install-extension esbenp.prettier-vscode
+echo ""
+echo "--> Step 1: VS Code"
+if [ ${#CODE_CLI[@]} -eq 0 ]; then
+  if [ "$OS_TYPE" = "Darwin" ] && command -v brew &>/dev/null; then
+    try "install VS Code" run brew install --cask visual-studio-code
+    if [ "$DRY_RUN" = false ]; then find_code_cli || true; fi
+  else
+    manual "Install VS Code from Microsoft's repository: https://code.visualstudio.com/docs/setup/linux"
+  fi
 fi
 
-mkdir -p "$(dirname "$SETTINGS_PATH")"
-if [ ! -f "$SETTINGS_PATH" ]; then
-  echo "--> Deploying settings.json from template..."
-  cp "$RESOURCES_DIR/settings.json.template" "$SETTINGS_PATH"
+if ! command -v python3 &>/dev/null; then
+  manual "Install python3 (needed to merge settings.json)"
+fi
+
+echo ""
+echo "--> Step 2: Extensions"
+if [ ${#CODE_CLI[@]} -gt 0 ] || [ "$DRY_RUN" = true ]; then
+  for ext in ${MISSING_EXTS[@]+"${MISSING_EXTS[@]}"}; do
+    try "install $ext" run ${CODE_CLI[@]+"${CODE_CLI[@]}"} --install-extension "$ext"
+  done
 else
-  # Use python to safely merge settings without destroying other keys
-  python3 -c '
-import json, sys
-
-path = sys.argv[1]
-template_path = sys.argv[2]
-
-try:
-    with open(path, "r") as f:
-        data = json.load(f)
-except Exception:
-    data = {}
-
-with open(template_path, "r") as f:
-    template = json.load(f)
-
-for k, v in template.items():
-    data[k] = v
-
-with open(path, "w") as f:
-    json.dump(data, f, indent=4)
-print("[+] Successfully merged settings into " + path)
-' "$SETTINGS_PATH" "$RESOURCES_DIR/settings.json.template"
+  echo "[-] Skipped: no VS Code CLI"
 fi
 
-echo "[+] VS Code setup applied successfully!"
+echo ""
+echo "--> Step 3: settings.json (deep merge with backup)"
+if command -v python3 &>/dev/null; then
+  if [ "$DRY_RUN" = true ]; then
+    python3 -I "$SETTINGS_TOOL" merge "$SETTINGS_PATH" "$TEMPLATE" --dry-run
+  else
+    try "merge settings.json" python3 -I "$SETTINGS_TOOL" merge "$SETTINGS_PATH" "$TEMPLATE"
+  fi
+fi
+
+echo ""
+echo "======================================================================"
+if [ "$DRY_RUN" = true ]; then
+  echo "[*] Dry run complete; nothing was changed."
+  exit 0
+fi
+
+echo " Verification"
+audit
+echo ""
+echo "======================================================================"
+for step in ${FAILED_STEPS[@]+"${FAILED_STEPS[@]}"}; do echo "[!] Failed step: $step"; done
+for step in ${MANUAL_STEPS[@]+"${MANUAL_STEPS[@]}"}; do echo "[*] Manual step: $step"; done
+if [ ${#MISSING[@]} -eq 0 ] && [ ${#FAILED_STEPS[@]} -eq 0 ]; then
+  echo "[OK] VS Code setup applied and verified."
+  exit 0
+fi
+[ ${#MISSING[@]} -gt 0 ] && echo "[!] Still missing: ${MISSING[*]}"
+exit 1

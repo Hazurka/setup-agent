@@ -1,136 +1,62 @@
 ---
 name: vscode-setup
 description: >-
-  Use this skill to configure, audit, maintain, or replicate the VS Code environment
-  to aesthetically match Ghostty and the terminal setup (Catppuccin Mocha theme,
-  JetBrains Mono Nerd Font typography, and coding ligatures) while preserving
-  the user's existing icon theme (vscode-icons), enabling native syntax highlighting
-  for .env and .gitignore files, and setting up official developer tooling for
-  Terraform, Go, Node.js, and Frontend (ESLint, Prettier, format-on-save).
+  Audits or applies a VS Code setup that matches the Ghostty terminal:
+  Catppuccin Mocha theme, JetBrains Mono Nerd Font with ligatures, the
+  vscode-icons icon theme, .env and .gitignore highlighting, and official
+  extensions with format-on-save for Terraform, Go, and JavaScript/TypeScript
+  (ESLint, Prettier). Merges into the existing settings.json without losing
+  other settings. Use when the user wants to set up, fix, theme, or sync VS Code,
+  or install its extensions on macOS or Linux.
+license: MIT
+compatibility: macOS or Linux with VS Code (stable, Insiders or Flatpak) and python3.
+metadata:
+  repository: https://github.com/Hazurka/setup-agent
 ---
 
-# VS Code Setup Skill (Synchronized with Ghostty & Developer Tooling)
+# VS Code Setup
 
-This skill configures and verifies Visual Studio Code so its themes, colors, and typography match the Ghostty terminal environment, while strictly preserving your existing icon theme (`vscode-icons`), activating native `.env`/`.gitignore` syntax highlighting, and configuring official tooling for **Terraform**, **Go**, and **JavaScript / TypeScript / Frontend**.
+Installs the extensions listed below and merges `assets/settings.json.template` into the user's `settings.json`. All paths are relative to this skill's directory.
 
-## Core Configuration Principles
+## Workflow
 
-1. **Theme & Typography Match**:
-   - Official **Catppuccin Mocha** color theme with **mauve** accent color.
-   - **JetBrainsMono Nerd Font** with coding ligatures (`!=`, `=>`, `===`, `->`) enabled for both editor and integrated terminal.
-2. **Preserve Icon Theme**: Retains `"workbench.iconTheme": "vscode-icons"`.
-3. **Native Syntax Highlighting**:
-   - `.gitignore`: Core `"ignore"` grammar (`git-base`).
-   - `.env`: Core `"properties"` TextMate grammar (`source.ini`).
-4. **Developer Tooling (Official Vendor Extensions Only)**:
-   - **Terraform**: `HashiCorp.terraform` with automatic `terraform fmt` format on save.
-   - **Go**: `golang.Go` (Go Team at Google) with `source.organizeImports` on save.
-   - **JavaScript / TypeScript / Frontend**: `dbaeumer.vscode-eslint` (Microsoft) and `esbenp.prettier-vscode` (Prettier) with format on save.
+1. **Audit first** (read-only):
+   ```bash
+   bash scripts/verify-or-install.sh --check
+   ```
+   Exit 0 = complete, 1 = something missing. It lists each missing extension and each template setting that is absent or different.
 
----
+2. **Show the user the result and get approval.** Preview with:
+   ```bash
+   bash scripts/verify-or-install.sh --apply --dry-run
+   ```
 
-## Configuration Reference: `settings.json`
+3. **Apply** after approval (`-y` because agents have no TTY):
+   ```bash
+   bash scripts/verify-or-install.sh --apply -y
+   ```
+   The script re-audits at the end and exits non-zero if anything is still missing.
 
-macOS: `~/Library/Application Support/Code/User/settings.json`  
-Linux: `~/.config/Code/User/settings.json`
+## How settings.json is handled
 
-```json
-{
-  "workbench.iconTheme": "vscode-icons",
-  "workbench.colorTheme": "Catppuccin Mocha",
-  "catppuccin.accentColor": "mauve",
-  "editor.fontFamily": "'JetBrainsMono Nerd Font', 'JetBrains Mono', Menlo, Monaco, 'Courier New', monospace",
-  "editor.fontSize": 14,
-  "editor.lineHeight": 1.5,
-  "editor.fontLigatures": true,
-  "editor.semanticHighlighting.enabled": true,
-  "terminal.integrated.fontFamily": "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace",
-  "terminal.integrated.fontSize": 14,
-  "terminal.integrated.lineHeight": 1.2,
-  "terminal.integrated.minimumContrastRatio": 1,
-  "window.titleBarStyle": "custom",
-  "files.associations": {
-    ".env*": "properties",
-    "*.env": "properties",
-    ".gitignore*": "ignore",
-    "*ignore": "ignore"
-  },
-  "[terraform]": {
-    "editor.defaultFormatter": "hashicorp.terraform",
-    "editor.formatOnSave": true
-  },
-  "[terraform-vars]": {
-    "editor.defaultFormatter": "hashicorp.terraform",
-    "editor.formatOnSave": true
-  },
-  "[go]": {
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-      "source.organizeImports": "always"
-    }
-  },
-  "[go.mod]": {
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-      "source.organizeImports": "always"
-    }
-  },
-  "[javascript]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
-  },
-  "[javascriptreact]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
-  },
-  "[typescript]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
-  },
-  "[typescriptreact]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
-  },
-  "[json]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
-  },
-  "[jsonc]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
-  },
-  "[html]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
-  },
-  "[css]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
-  }
-}
-```
+- Parsed as JSONC, so comments and trailing commas are fine.
+- **Deep merge:** only the keys in the template are set. Nested objects such as `files.associations` or `[go]` keep the user's other entries. Everything else is untouched.
+- A timestamped backup (`settings.json.bak-<timestamp>`) is written before any change. Comments are not kept in the rewritten file but stay in the backup; mention this to the user if the script says so.
+- If the file cannot be parsed, nothing is written and the script exits 1. Ask the user to fix the file rather than replacing it.
+- The settings file is auto-detected (stable, Insiders, Flatpak). Override with `--settings <path>`.
 
----
+## Extensions
 
-## Installed Extensions (Vendor Official)
+Extension ID | Purpose
+:-- | :--
+`catppuccin.catppuccin-vsc` | Catppuccin Mocha theme (mauve accent)
+`vscode-icons-team.vscode-icons` | File icon theme (`workbench.iconTheme`)
+`hashicorp.terraform` | Terraform language server, `terraform fmt` on save
+`golang.go` | Go support, organise imports on save
+`dbaeumer.vscode-eslint` | ESLint
+`esbenp.prettier-vscode` | Prettier, default formatter for JS/TS/JSON/HTML/CSS
 
-Extension ID                     | Description                          | Publisher / Vendor
-:------------------------------- | :----------------------------------- | :-----------------
-`Catppuccin.catppuccin-vsc`      | Catppuccin Theme                     | Catppuccin Team
-`vscode-icons-team.vscode-icons` | Preserved File Icon Theme            | VSCode Icons Team
-`hashicorp.terraform`            | Official Terraform HCL & Formatter   | HashiCorp
-`golang.go`                      | Official Go language support & gopls | Go Team at Google
-`dbaeumer.vscode-eslint`         | Official ESLint integration          | Microsoft
-`esbenp.prettier-vscode`         | Official Prettier code formatter     | Prettier
+## Notes
 
----
-
-## Audit & Apply Commands
-
-```bash
-# Audit VS Code setup:
-~/.agents/skills/vscode-setup/scripts/verify-or-install.sh --check
-
-# Apply VS Code setup:
-~/.agents/skills/vscode-setup/scripts/verify-or-install.sh --apply
-```
+- If VS Code is missing: on macOS with Homebrew the apply step installs the `visual-studio-code` cask; on Linux it prints Microsoft's install page as a manual step.
+- The font itself is installed by the `terminal-setup` skill; this skill only warns if it is missing.
