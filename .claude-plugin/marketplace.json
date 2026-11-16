@@ -2,7 +2,8 @@
   "name": "setup-agent",
   "description": "Workstation setup skills: Ghostty terminal, Bash/Zsh, Starship and a matching VS Code.",
   "owner": {
-    "name": "Konstantin Boev"
+    "name": "Hazurka",
+    "url": "https://github.com/Hazurka"
   },
   "plugins": [
     {

@@ -3,10 +3,18 @@
   "version": "1.0.0",
   "description": "Skills that audit and set up a Ghostty + Bash/Zsh + Starship terminal and a matching Catppuccin VS Code on macOS and Linux.",
   "author": {
-    "name": "Konstantin Boev"
+    "name": "Hazurka",
+    "url": "https://github.com/Hazurka"
   },
   "homepage": "https://github.com/Hazurka/setup-agent",
   "repository": "https://github.com/Hazurka/setup-agent",
   "license": "MIT",
-  "keywords": ["dotfiles", "terminal", "ghostty", "starship", "vscode", "setup"]
+  "keywords": [
+    "dotfiles",
+    "terminal",
+    "ghostty",
+    "starship",
+    "vscode",
+    "setup"
+  ]
 }

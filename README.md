@@ -73,4 +73,4 @@ The test suite runs shellcheck, validates every `SKILL.md` against the Agent Ski
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 Hazurka
