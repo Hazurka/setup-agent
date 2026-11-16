@@ -1,0 +1,170 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+
+add_newline = true
+
+# Two-line prompt: status & context on top, command on bottom
+format = """
+$os\
+$directory\
+$git_branch\
+$git_status\
+$package\
+${custom.react}\
+${custom.angular}\
+${custom.vue}\
+$nodejs\
+$bun\
+$deno\
+$golang\
+$terraform\
+$python\
+$rust\
+$docker_context\
+$fill\
+$cmd_duration\
+$jobs\
+$time\
+$line_break\
+$character"""
+
+[fill]
+symbol = " "
+
+[character]
+success_symbol = "[❯](bold #cba6f7)"
+error_symbol = "[❯](bold #f38ba8)"
+vimcmd_symbol = "[❮](bold #a6e3a1)"
+
+[os]
+disabled = false
+format = "[$symbol]($style) "
+style = "bold #89b4fa"
+
+[os.symbols]
+Macos = " "
+
+[directory]
+style = "bold #89dceb"
+format = "[$path]($style)[$read_only]($read_only_style) "
+truncation_length = 3
+truncation_symbol = "…/"
+home_symbol = "~"
+read_only = " 󰌾"
+read_only_style = "bold #f38ba8"
+
+[git_branch]
+symbol = " "
+style = "bold #cba6f7"
+format = "[$symbol$branch(:$remote_branch)]($style) "
+
+[git_status]
+style = "bold #fab387"
+format = '([\[$all_status$ahead_behind\]]($style) )'
+conflicted = '=$count '
+ahead = '⇡$count '
+behind = '⇣$count '
+diverged = '⇕⇡$ahead_count⇣$behind_count '
+untracked = '?$count '
+stashed = '󰟫 $count '
+modified = '!$count '
+staged = '+$count '
+renamed = '»$count '
+deleted = '✘$count '
+
+# Application Package Version (reads package.json version, including private apps)
+[package]
+display_private = true
+symbol = "󰏗 "
+style = "bold #bac2de"
+format = "[$symbol$version]($style) "
+
+# React Framework Indicator (React atom in cyan)
+[custom.react]
+description = "React project indicator"
+when = 'grep -qE "\"react\"|\"react-scripts\"|\"next\"" package.json 2>/dev/null'
+symbol = " "
+style = "bold #89dceb"
+format = "[$symbol]($style)"
+
+# Angular Framework Indicator (Angular shield in red)
+[custom.angular]
+description = "Angular project indicator"
+when = 'test -f angular.json || grep -q "\"@angular" package.json 2>/dev/null'
+symbol = " "
+style = "bold #f38ba8"
+format = "[$symbol]($style)"
+
+# Vue Framework Indicator (Vue logo in emerald green)
+[custom.vue]
+description = "Vue.js project indicator"
+when = 'test -f nuxt.config.js || test -f nuxt.config.ts || grep -qE "\"vue\"|\"nuxt\"" package.json 2>/dev/null'
+symbol = "󰡄 "
+style = "bold #a6e3a1"
+format = "[$symbol]($style)"
+
+# Node.js Runtime (Node hexagon in green)
+[nodejs]
+symbol = " "
+style = "bold #a6e3a1"
+format = "[$symbol($version )]($style)"
+detect_files = ["package.json", ".node-version", ".nvmrc"]
+detect_extensions = ["js", "mjs", "cjs", "ts", "mts", "cts", "jsx", "tsx"]
+
+# Bun Runtime
+[bun]
+symbol = " "
+style = "bold #f5e0dc"
+format = "[$symbol($version )]($style)"
+
+# Deno Runtime
+[deno]
+symbol = " "
+style = "bold #cdd6f4"
+format = "[$symbol($version )]($style)"
+
+# Go (Golang)
+[golang]
+symbol = " "
+style = "bold #74c7ec"
+format = "[$symbol($version )]($style)"
+
+# Terraform (HCL & Workspace)
+[terraform]
+symbol = "󱁢 "
+style = "bold #b4befe"
+format = "[$symbol$workspace]($style) "
+
+# Python
+[python]
+symbol = " "
+style = "bold #f9e2af"
+format = '[${symbol}${pyenv_prefix}(${version} )(\($virtualenv\) )]($style)'
+
+# Rust
+[rust]
+symbol = "󱘗 "
+style = "bold #eba0ac"
+format = "[$symbol($version )]($style)"
+
+# Docker
+[docker_context]
+symbol = " "
+style = "bold #89b4fa"
+format = "[$symbol$context]($style) "
+
+[cmd_duration]
+min_time = 2_000
+style = "bold #f9e2af"
+format = "[󱎫 $duration]($style)"
+
+[jobs]
+symbol = "✦ "
+style = "bold #fab387"
+number_threshold = 1
+format = "[$symbol$number]($style) "
+
+[time]
+disabled = false
+time_format = "%R"
+style = "bold #6c7086"
+format = "[$time]($style)"

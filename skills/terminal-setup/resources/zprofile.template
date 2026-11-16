@@ -1,0 +1,22 @@
+# ===================================================================
+# ZSH Login Profile (~/.zprofile)
+# ===================================================================
+
+# Homebrew environment (macOS Apple Silicon, Intel, or Linux)
+if [[ -x "/opt/homebrew/bin/brew" ]]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]]; then
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+elif [[ -x "/usr/local/bin/brew" ]]; then
+  eval "$(/usr/local/bin/brew shellenv)"
+fi
+
+# Environment & PATH configuration
+[[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
+[[ -d "/Applications/Visual Studio Code.app/Contents/Resources/app/bin" ]] && \
+  export PATH="$PATH:/Applications/Visual Studio Code.app/Contents/Resources/app/bin"
+
+# Fastfetch welcome on terminal launch
+if command -v fastfetch &>/dev/null; then
+  fastfetch
+fi

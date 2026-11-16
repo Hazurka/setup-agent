@@ -1,0 +1,36 @@
+# ===================================================================
+# Ghostty Configuration (~/.config/ghostty/config)
+# ===================================================================
+
+# Font & Typography
+# Ghostty bundles JetBrains Mono & Nerd Font symbols natively
+font-family = JetBrains Mono
+font-size = 14
+font-feature = ["calt", "liga"]
+font-thicken = true
+adjust-cell-height = 10%
+
+# Theme (Catppuccin Mocha palette matches prompt and eza colors)
+theme = Catppuccin Mocha
+
+# Window Appearance
+window-padding-x = 12
+window-padding-y = 10
+window-padding-balance = true
+macos-titlebar-style = transparent
+
+# Cursor
+cursor-style = block
+cursor-style-blink = false
+
+# macOS Specific
+# Allows Option key to act as Alt/Meta (enables word jumps with Alt+Arrow)
+macos-option-as-alt = true
+
+# Shell Integration (Semantic prompts, click-to-move, jump-between-prompts)
+shell-integration = detect
+shell-integration-features = cursor,sudo,title
+
+# Mouse & Behavior
+mouse-hide-while-typing = true
+confirm-close-surface = false

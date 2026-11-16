@@ -1,0 +1,107 @@
+# ===================================================================
+# ZSH Interactive Configuration (~/.zshrc)
+# ===================================================================
+
+# Ensure PATH has Homebrew & local binaries in interactive subshells
+if [[ -z "$HOMEBREW_PREFIX" && -x "/opt/homebrew/bin/brew" ]]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -z "$HOMEBREW_PREFIX" && -x "/home/linuxbrew/.linuxbrew/bin/brew" ]]; then
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+fi
+[[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
+
+# -------------------------------------------------------------------
+# History Configuration (powers autosuggestions & search)
+# -------------------------------------------------------------------
+HISTFILE="$HOME/.zsh_history"
+HISTSIZE=10000
+SAVEHIST=10000
+setopt EXTENDED_HISTORY          # Record timestamps in history
+setopt HIST_EXPIRE_DUPS_FIRST    # Expire duplicate entries first when trimming
+setopt HIST_IGNORE_DUPS          # Do not write duplicated successive entries
+setopt HIST_IGNORE_SPACE         # Do not record entries starting with a space
+setopt HIST_VERIFY               # Review history expansions before executing
+setopt SHARE_HISTORY             # Share command history across concurrent sessions
+
+# -------------------------------------------------------------------
+# Shell Options & Navigation
+# -------------------------------------------------------------------
+setopt AUTO_CD                   # Type folder name directly to cd into it
+setopt INTERACTIVE_COMMENTS      # Allow comments starting with '#' in prompt
+
+# -------------------------------------------------------------------
+# Completion System
+# -------------------------------------------------------------------
+autoload -Uz compinit
+compinit -u
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' # Case-insensitive tab completion
+zstyle ':completion:*' menu select                       # Interactive tab menu
+
+# -------------------------------------------------------------------
+# Aliases: eza (modern ls) & navigation
+# -------------------------------------------------------------------
+if command -v eza &>/dev/null; then
+  alias ls="eza --icons=auto --group-directories-first"
+  alias l="eza -lh --icons=auto --group-directories-first --git --header"
+  alias ll="eza -lah --icons=auto --group-directories-first --git --header"
+  alias la="eza -a --icons=auto --group-directories-first"
+  alias lt="eza --tree --level=2 --icons=auto"
+  alias ltree="eza --tree --icons=auto"
+else
+  alias ls="ls --color=auto"
+  alias ll="ls -lah --color=auto"
+fi
+
+# Quick navigation & shortcuts
+alias ..="cd .."
+alias ...="cd ../.."
+alias reload="source ~/.zshrc"
+
+# Ghostty terminal compatibility (fallback terminfo for remote SSH hosts)
+if [[ "$TERM" == "xterm-ghostty" ]]; then
+  alias ssh="TERM=xterm-256color ssh"
+fi
+
+# -------------------------------------------------------------------
+# Ghostty Shell Integration (semantic prompts, jumping between marks)
+# -------------------------------------------------------------------
+if [[ -n "$GHOSTTY_RESOURCES_DIR" && -f "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration" ]]; then
+  builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
+fi
+
+# -------------------------------------------------------------------
+# Prompt: Starship
+# -------------------------------------------------------------------
+if command -v starship &>/dev/null; then
+  eval "$(starship init zsh)"
+fi
+
+# -------------------------------------------------------------------
+# Plugins (Cross-platform: macOS Homebrew, Linux /usr/share, or ~/.zsh)
+# -------------------------------------------------------------------
+# Fish-like command autosuggestions
+for _s in \
+  "${HOMEBREW_PREFIX:-/opt/homebrew}/share/zsh-autosuggestions/zsh-autosuggestions.zsh" \
+  "/usr/local/share/zsh-autosuggestions/zsh-autosuggestions.zsh" \
+  "/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh" \
+  "$HOME/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh"; do
+  if [[ -f "$_s" ]]; then
+    source "$_s"
+    bindkey '^ ' autosuggest-accept 2>/dev/null || true
+    break
+  fi
+done
+unset _s
+
+# Real-time syntax highlighting (must be loaded at the very end of .zshrc)
+for _s in \
+  "${HOMEBREW_PREFIX:-/opt/homebrew}/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" \
+  "/usr/local/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" \
+  "/usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" \
+  "$HOME/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"; do
+  if [[ -f "$_s" ]]; then
+    source "$_s"
+    break
+  fi
+done
+unset _s
