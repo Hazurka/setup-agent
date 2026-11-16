@@ -62,6 +62,7 @@ ASSETS_DIR="$SKILL_DIR/assets"
 # Test hooks: the test-suite uses these to simulate other platforms.
 OS_TYPE="${SETUP_AGENT_OS_TYPE:-$(uname -s)}"
 OS_RELEASE_FILE="${SETUP_AGENT_OS_RELEASE:-/etc/os-release}"
+ARCH="${SETUP_AGENT_ARCH:-$(uname -m)}"
 
 FAILED_STEPS=()
 MANUAL_STEPS=()
@@ -108,6 +109,8 @@ manual() {
 # ------------------------------------------------------------------------------
 DISTRO="unknown"
 DISTRO_FAMILY="unknown"
+IS_UBUNTU=false
+OBS_TARGET=""
 PKG_MGR="none"
 
 if [ "$OS_TYPE" = "Darwin" ]; then
@@ -119,11 +122,13 @@ elif [ "$OS_TYPE" = "Linux" ] && [ -f "$OS_RELEASE_FILE" ]; then
   OS_INFO="$(
     # shellcheck disable=SC1090
     . "$OS_RELEASE_FILE"
-    echo "${ID:-}|${ID_LIKE:-}|${PRETTY_NAME:-${NAME:-Linux}}"
+    echo "${ID:-}|${ID_LIKE:-}|${VERSION_ID:-}|${PRETTY_NAME:-${NAME:-Linux}}"
   )"
   OS_ID="${OS_INFO%%|*}"
   OS_REST="${OS_INFO#*|}"
   OS_LIKE="${OS_REST%%|*}"
+  OS_REST="${OS_REST#*|}"
+  OS_VERSION="${OS_REST%%|*}"
   DISTRO="${OS_REST#*|}"
   IDS=" $OS_ID $OS_LIKE "
 
@@ -139,6 +144,12 @@ elif [ "$OS_TYPE" = "Linux" ] && [ -f "$OS_RELEASE_FILE" ]; then
     esac
   fi
 
+  case "$IDS" in *" ubuntu "*) IS_UBUNTU=true ;; esac
+  case "$OS_ID" in
+    opensuse-tumbleweed|opensuse-slowroll) OBS_TARGET="openSUSE_Tumbleweed" ;;
+    opensuse-leap) OBS_TARGET="openSUSE_Leap_$OS_VERSION" ;;
+  esac
+
   case "$DISTRO_FAMILY" in
     fedora) PKG_MGR="dnf" ;;
     suse)   PKG_MGR="zypper" ;;
@@ -150,7 +161,7 @@ fi
 echo "======================================================================"
 echo " Terminal Environment Audit (vendor-official package managers)"
 echo "======================================================================"
-echo "[*] OS:           $OS_TYPE ($(uname -m))"
+echo "[*] OS:           $OS_TYPE ($ARCH)"
 echo "[*] Distribution: $DISTRO (family: $DISTRO_FAMILY)"
 echo "[*] Package Mgr:  $PKG_MGR"
 echo "[*] Login Shell:  ${SHELL:-unknown}"
@@ -206,9 +217,10 @@ find_plugin() {
   return 1
 }
 
-# Prints "nerd", "plain" or nothing.
+# Prints "nerd", "plain" or nothing. Output is captured before grepping:
+# `fc-list | grep -q` fails under pipefail when grep exits early (SIGPIPE).
 font_status() {
-  local f
+  local f fonts=""
   if [ "$OS_TYPE" = "Darwin" ]; then
     for f in "$HOME"/Library/Fonts/JetBrainsMono*Nerd* /Library/Fonts/JetBrainsMono*Nerd*; do
       if [ -e "$f" ]; then
@@ -218,19 +230,31 @@ font_status() {
     done
     return 0
   fi
-  command -v fc-list &>/dev/null || return 0
-  if fc-list 2>/dev/null | grep -qi "JetBrainsMono Nerd Font"; then
+  if command -v fc-list &>/dev/null; then
+    fonts="$(fc-list 2>/dev/null || true)"
+  fi
+  # Without fontconfig (minimal installs), look at the font files themselves.
+  if [ -z "$fonts" ]; then
+    fonts="$(find /usr/share/fonts /usr/local/share/fonts "$HOME/.local/share/fonts" "$HOME/.fonts" \
+      -iname '*JetBrains*Mono*' 2>/dev/null || true)"
+  fi
+  if grep -qiE "JetBrainsMono ?Nerd" <<< "$fonts"; then
     echo "nerd"
-  elif fc-list 2>/dev/null | grep -qi "JetBrains Mono"; then
+  elif grep -qiE "JetBrains ?Mono" <<< "$fonts"; then
     echo "plain"
   fi
+}
+
+# cmp/diff live in diffutils, which minimal openSUSE/Fedora installs lack.
+same_file() {
+  [ "$(cksum < "$1")" = "$(cksum < "$2")" ]
 }
 
 MISSING=()
 
 audit() {
   MISSING=()
-  local tool path pair target template font
+  local tool path pair target template font err
 
   echo ""
   echo "--> Terminal emulator"
@@ -281,12 +305,12 @@ audit() {
     if [ ! -f "$target" ]; then
       echo "[-] missing:  $target"
       MISSING+=("$target")
-    elif cmp -s "$target" "$template"; then
+    elif same_file "$target" "$template"; then
       echo "[+] current:  $target"
     else
       echo "[~] differs:  $target (kept; --diff to view, --update-configs to replace)"
       CONFIGS_DIFFER+=("$pair")
-      if [ "$SHOW_DIFF" = true ]; then
+      if [ "$SHOW_DIFF" = true ] && command -v diff &>/dev/null; then
         diff -u "$target" "$template" || true
       fi
     fi
@@ -298,6 +322,17 @@ audit() {
     else
       echo "[-] ghostty config fails validation (run: ghostty +validate-config)"
       MISSING+=("valid ghostty config")
+    fi
+  fi
+
+  # fastfetch exits 0 even for a broken config; errors only appear on stderr.
+  if command -v fastfetch &>/dev/null && [ -f "$HOME/.config/fastfetch/config.jsonc" ]; then
+    err="$(fastfetch --config "$HOME/.config/fastfetch/config.jsonc" --pipe 2>&1 >/dev/null || true)"
+    if grep -q "Error" <<< "$err"; then
+      echo "[-] fastfetch config fails to load: $(head -n 1 <<< "$err")"
+      MISSING+=("valid fastfetch config")
+    else
+      echo "[+] fastfetch config loads"
     fi
   fi
 }
@@ -365,12 +400,25 @@ deploy_config() {
   if [ ! -f "$target" ]; then
     echo "[+] Deploying $target"
     run mkdir -p "$(dirname "$target")" && run cp "$template" "$target"
-  elif [ "$UPDATE_CONFIGS" = true ] && ! cmp -s "$target" "$template"; then
+  elif [ "$UPDATE_CONFIGS" = true ] && ! same_file "$target" "$template"; then
     local backup
     backup="$target.bak-$(date +%Y%m%d%H%M%S)"
     echo "[+] Replacing $target (backup: $backup)"
     run cp -p "$target" "$backup" && run cp "$template" "$target"
   fi
+}
+
+add_zsh_users_obs_repo() {
+  # Explicit alias: the project's .repo file would name it after the plugin only.
+  local alias="zsh-users-$1"
+  if zypper --non-interactive repos "$alias" &>/dev/null; then
+    return 0
+  fi
+  as_root zypper --non-interactive addrepo --refresh \
+    "https://download.opensuse.org/repositories/shells:zsh-users:$1/$OBS_TARGET/" "$alias" || return 1
+  # download.opensuse.org redirects to mirrors that are occasionally stale: retry once.
+  as_root zypper --non-interactive --gpg-auto-import-keys refresh "$alias" ||
+    as_root zypper --non-interactive --gpg-auto-import-keys refresh --force "$alias"
 }
 
 add_eza_apt_repo() {
@@ -382,6 +430,11 @@ add_eza_apt_repo() {
   as_root chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list || return 1
   as_root apt-get update
 }
+
+if [ "$PKG_MGR" = apt ]; then
+  # Refresh package lists first: availability checks below use apt-cache.
+  try "apt-get update" as_root apt-get update
+fi
 
 echo ""
 echo "--> Step 1: Ghostty"
@@ -453,12 +506,26 @@ case "$PKG_MGR" in
     ;;
 
   zypper)
+    # Tools and fonts: openSUSE OSS. nerdfonts-symbolsonly-fonts adds the
+    # Nerd glyphs the prompt uses to the plain JetBrains Mono.
     PKGS=()
-    for item in eza starship fastfetch zsh-autosuggestions zsh-syntax-highlighting; do
+    for item in eza starship fastfetch; do
       if is_missing "$item"; then PKGS+=("$item"); fi
     done
-    if is_missing font; then PKGS+=(jetbrains-mono-fonts); fi
+    if is_missing font; then PKGS+=(jetbrains-mono-fonts nerdfonts-symbolsonly-fonts); fi
     if [ ${#PKGS[@]} -gt 0 ]; then try "zypper install ${PKGS[*]}" as_root zypper --non-interactive install "${PKGS[@]}"; fi
+
+    # The Zsh plugins are not in OSS; zsh-users publishes them on OBS
+    # (shells:zsh-users:<plugin>), built for x86_64 only.
+    for item in zsh-autosuggestions zsh-syntax-highlighting; do
+      is_missing "$item" || continue
+      if [ "$ARCH" = x86_64 ] && [ -n "$OBS_TARGET" ]; then
+        try "add OBS repo shells:zsh-users:$item" add_zsh_users_obs_repo "$item"
+        try "install $item" as_root zypper --non-interactive install "$item"
+      else
+        manual "$item has no openSUSE package for $ARCH; clone https://github.com/zsh-users/$item into ~/.zsh/$item"
+      fi
+    done
     ;;
 
   pacman)
@@ -471,7 +538,6 @@ case "$PKG_MGR" in
     ;;
 
   apt)
-    try "apt-get update" as_root apt-get update
     PKGS=()
     for item in zsh-autosuggestions zsh-syntax-highlighting; do
       if is_missing "$item"; then PKGS+=("$item"); fi
@@ -491,7 +557,11 @@ case "$PKG_MGR" in
     if is_missing fastfetch; then
       if pkg_available_apt fastfetch; then
         try "install fastfetch" as_root apt-get install -y fastfetch
-      elif command -v add-apt-repository &>/dev/null; then
+      elif [ "$IS_UBUNTU" = true ]; then
+        # PPAs are Ubuntu-only; add-apt-repository ships in software-properties-common.
+        if ! command -v add-apt-repository &>/dev/null; then
+          try "install software-properties-common" as_root apt-get install -y software-properties-common
+        fi
         try "add fastfetch PPA" as_root add-apt-repository -y ppa:zhangsongcui3371/fastfetch
         try "install fastfetch" as_root apt-get install -y fastfetch
       else

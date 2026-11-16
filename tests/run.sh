@@ -8,7 +8,7 @@ section() { echo ""; echo "== $1"; }
 check() { "$@" || STATUS=1; }
 
 section "shellcheck"
-SCRIPTS=(install.sh skills/*/scripts/*.sh tests/*.sh)
+SCRIPTS=(install.sh skills/*/scripts/*.sh tests/*.sh tests/containers/*.sh)
 if shellcheck -s bash -x "${SCRIPTS[@]}"; then
   echo "  ok   ${#SCRIPTS[@]} scripts"
 else
@@ -27,6 +27,14 @@ check python3 -I -c 'import json; json.load(open("skills/vscode-setup/assets/set
 if command -v zsh >/dev/null; then check zsh -n skills/terminal-setup/assets/zshrc.template skills/terminal-setup/assets/zprofile.template; fi
 check /bin/bash -n skills/terminal-setup/assets/bashrc.template
 check /bin/bash -n skills/terminal-setup/assets/bash_profile.template
+if command -v fastfetch >/dev/null; then
+  # fastfetch only loads *.jsonc files and reports errors on stderr (exit 0).
+  ff_tmp="$(mktemp -d)"
+  cp skills/terminal-setup/assets/fastfetch.jsonc.template "$ff_tmp/config.jsonc"
+  ff_err="$(fastfetch --config "$ff_tmp/config.jsonc" --pipe 2>&1 >/dev/null)"
+  rm -rf "$ff_tmp"
+  if grep -q "Error" <<< "$ff_err"; then echo "  FAIL fastfetch template: $ff_err"; STATUS=1; fi
+fi
 echo "  done"
 
 section "vscode_settings.py"

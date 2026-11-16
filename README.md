@@ -38,6 +38,8 @@ Options: `--check` (show status), `--uninstall`, `--agents claude,codex` (subset
 
 Ask your agent, e.g. *"set up my terminal"*, *"check my VS Code setup"* or *"bootstrap this new machine"*. The agent audits first, shows you what is missing, and applies changes only after you approve.
 
+The scripts cover the tested install paths. When they can't finish something (e.g. Ghostty on Debian, Starship on older Ubuntu), they report a manual step. The agent then looks up the official sources in the skill's `references/install-sources.md`, proposes a fix, applies it once you approve, and re-runs the check until it passes.
+
 The scripts also work by hand:
 
 ```bash
@@ -62,10 +64,12 @@ macOS (Homebrew), Fedora, openSUSE, Debian/Ubuntu (and derivatives), Arch (and d
 ## Development
 
 ```bash
-tests/run.sh
+tests/run.sh                    # fast: lint, spec, unit tests, simulations
+tests/containers/run.sh         # slow: real installs in Linux containers (podman or docker)
+tests/containers/run.sh fedora  # a single distro
 ```
 
-The test suite runs shellcheck, validates every `SKILL.md` against the Agent Skills spec, unit-tests the settings merge, tests `install.sh` in a throwaway `$HOME`, and dry-runs the terminal script against simulated macOS, Fedora, openSUSE, Debian, Ubuntu, Arch and Rocky systems.
+The test suite runs shellcheck, validates every `SKILL.md` against the Agent Skills spec, unit-tests the settings merge, tests `install.sh` in a throwaway `$HOME`, and dry-runs the terminal script against simulated macOS, Fedora, openSUSE, Debian, Ubuntu, Arch and Rocky systems. The container tests run real installs on Fedora 43, openSUSE Tumbleweed (arm64 and x86_64), Debian 12 and 13, Ubuntu 24.04 and 25.04, and Arch.
 
 ## License
 

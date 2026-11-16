@@ -155,7 +155,16 @@ font_installed() {
     done
     return 1
   fi
-  command -v fc-list &>/dev/null && fc-list 2>/dev/null | grep -qi "JetBrains *Mono"
+  # Capture first: `fc-list | grep -q` fails under pipefail (SIGPIPE).
+  local fonts=""
+  if command -v fc-list &>/dev/null; then
+    fonts="$(fc-list 2>/dev/null || true)"
+  fi
+  if [ -z "$fonts" ]; then
+    fonts="$(find /usr/share/fonts /usr/local/share/fonts "$HOME/.local/share/fonts" "$HOME/.fonts" \
+      -iname '*JetBrains*Mono*' 2>/dev/null || true)"
+  fi
+  grep -qiE "JetBrains ?Mono" <<< "$fonts"
 }
 
 echo "======================================================================"
@@ -196,7 +205,7 @@ audit() {
   if [ ${#CODE_CLI[@]} -gt 0 ]; then
     installed="$("${CODE_CLI[@]}" --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
     for ext in "${EXTENSIONS[@]}"; do
-      if printf '%s\n' "$installed" | grep -qxF "$ext"; then
+      if grep -qxF "$ext" <<< "$installed"; then
         echo "[+] $ext"
       else
         echo "[-] $ext: missing"

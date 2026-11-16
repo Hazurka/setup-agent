@@ -30,6 +30,7 @@ Runs the two sibling skills in order. The terminal goes first because it install
    bash ../terminal-setup/scripts/verify-or-install.sh --apply -y
    bash ../vscode-setup/scripts/verify-or-install.sh --apply -y
    ```
-4. Report the final verification of each script, including any failed or manual steps.
+4. Resolve remaining manual or failed steps as each skill's step 4 describes: `../terminal-setup/references/install-sources.md` and `../vscode-setup/references/install-sources.md`. Propose each fix and apply it only after approval.
+5. Re-run both `--check` commands and report the result, including anything the user chose to leave out.
 
 Follow the rules in `../terminal-setup/SKILL.md` and `../vscode-setup/SKILL.md` (sudo, Homebrew, `--update-configs` only on explicit request). If the sibling directories are not found, tell the user to install the full repository with its `install.sh`.

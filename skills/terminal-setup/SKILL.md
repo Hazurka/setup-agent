@@ -35,14 +35,16 @@ Sets up Ghostty, Bash/Zsh, Starship, eza, Fastfetch, the Zsh plugins and the Jet
    ```bash
    bash scripts/verify-or-install.sh --apply -y
    ```
-   The script re-audits at the end and exits non-zero if anything is still missing, listing failed and manual steps. Report those to the user verbatim.
+   The script re-audits at the end and exits non-zero if anything is still missing, listing failed and manual steps.
+
+4. **Finish the rest yourself, with approval.** For each `Manual step:` or `Failed step:` line, read [references/install-sources.md](references/install-sources.md). Propose a concrete fix to the user (command plus source), apply it once approved, and repeat `--check` until it exits 0. If the user declines a fix, leave that item and say so in your summary.
 
 ## Rules
 
 - **Existing configs are never overwritten by default.** Missing ones are deployed from `assets/`. Use `--check --diff` to show differences. Only pass `--update-configs` when the user explicitly asks to replace their configs; each replaced file is backed up as `<file>.bak-<timestamp>`.
 - **Linux installs need sudo.** If `sudo` would prompt for a password, ask the user to run `sudo -v` in their terminal first (in Claude Code: `! sudo -v`), or have them run the apply command themselves.
 - **macOS needs Homebrew.** If it is missing the script stops and points to https://brew.sh; do not install Homebrew without the user's approval.
-- Never replace a vendor package step with `curl | sh`. Where no vendor package exists (e.g. Starship on Debian 12), the script prints a manual step; relay it.
+- The script never runs `curl | sh`. Where no package exists (e.g. Starship on Debian 12) it prints a manual step for you to resolve in step 4. A vendor install script is the last option there, and only with the user's explicit agreement.
 - Changing the login shell (`chsh`) needs the user's password; tell the user the command, don't run it.
 
 ## Package sources
@@ -52,11 +54,11 @@ Tool | macOS | Fedora | openSUSE | Debian / Ubuntu | Arch
 Ghostty | cask `ghostty` | COPR `scottames/ghostty` | OSS | apt (if packaged), else Flathub, else manual | extra
 Starship | `starship` | COPR `atim/starship` | OSS | apt (Debian 13+ / Ubuntu 25.04+), else manual | extra
 eza | `eza` | Fedora | OSS | apt, else vendor repo `deb.gierens.de` | extra
-Fastfetch | `fastfetch` | Fedora | OSS | apt, else PPA `zhangsongcui3371/fastfetch` | extra
-Zsh + plugins | brew | Fedora | OSS | apt | extra
-Font | cask `font-jetbrains-mono-nerd-font` | `jetbrains-mono-fonts-all` | `jetbrains-mono-fonts` | `fonts-jetbrains-mono` | `ttf-jetbrains-mono-nerd`
+Fastfetch | `fastfetch` | Fedora | OSS | apt, else PPA `zhangsongcui3371/fastfetch` (Ubuntu only) | extra
+Zsh + plugins | brew | Fedora | zsh: OSS; plugins: zsh-users OBS repos (x86_64 only, else manual) | apt | extra
+Font | cask `font-jetbrains-mono-nerd-font` | `jetbrains-mono-fonts-all` | `jetbrains-mono-fonts` + `nerdfonts-symbolsonly-fonts` | `fonts-jetbrains-mono` | `ttf-jetbrains-mono-nerd`
 
-On Fedora, openSUSE and Debian/Ubuntu the distro font is plain JetBrains Mono. Ghostty bundles Nerd Font symbols, so the terminal is fine. VS Code's integrated terminal will lack prompt icons unless the user installs the Nerd Font from https://github.com/ryanoasis/nerd-fonts/releases.
+On Fedora and Debian/Ubuntu the distro font is plain JetBrains Mono (openSUSE adds the Nerd symbols package). Ghostty bundles Nerd Font symbols, so the terminal is fine. VS Code's integrated terminal will lack prompt icons unless the user installs the Nerd Font from https://github.com/ryanoasis/nerd-fonts/releases.
 
 RHEL-family systems (Rocky, Alma, CentOS) are reported as unsupported because the COPRs above are Fedora-only.
 
@@ -69,5 +71,9 @@ Template (`assets/`) | Target
 `ghostty.config.template` | `~/.config/ghostty/config`
 `starship.toml.template` | `~/.config/starship.toml`
 `fastfetch.jsonc.template` | `~/.config/fastfetch/config.jsonc`
+
+The audit also loads the Ghostty and fastfetch configs to confirm they parse.
+
+The fastfetch config runs on every login shell (from `~/.bash_profile` / `~/.zprofile`). It shows OS, host, uptime, packages, shell, terminal, terminal font, CPU, memory and battery with Nerd Font icons, followed by the colour palette. To change what it shows, edit `assets/fastfetch.jsonc.template` (module list: `fastfetch --list-modules`) and redeploy with `--apply --update-configs`.
 
 The Starship config uses Catppuccin Mocha colours and shows package version, Node/Bun/Deno, React/Angular/Vue, Go and Terraform modules when the current directory is such a project.

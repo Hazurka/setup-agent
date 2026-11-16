@@ -92,8 +92,8 @@ def validate(skill_dir):
     if body_lines >= 500:
         errors.append(f"body is {body_lines} lines (keep under 500)")
 
-    # Files referenced as scripts/... or assets/... must exist.
-    for ref in sorted(set(re.findall(r"(?:\.\./[\w-]+/)?(?:scripts|assets)/[\w.-]+", body))):
+    # Files referenced as scripts/..., assets/... or references/... must exist.
+    for ref in sorted(set(re.findall(r"(?:\.\./[\w-]+/)?(?:scripts|assets|references)/[\w.-]+", body))):
         if not os.path.exists(os.path.normpath(os.path.join(skill_dir, ref))):
             errors.append(f"referenced file not found: {ref}")
     if "~/.agents" in body or "/Users/" in body:

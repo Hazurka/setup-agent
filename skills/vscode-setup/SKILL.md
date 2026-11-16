@@ -37,6 +37,8 @@ Installs the extensions listed below and merges `assets/settings.json.template` 
    ```
    The script re-audits at the end and exits non-zero if anything is still missing.
 
+4. **Finish the rest yourself, with approval.** For each `Manual step:` or `Failed step:` line (for example VS Code missing on Linux, or an unparseable settings.json), read [references/install-sources.md](references/install-sources.md). Propose the fix, apply it once approved, and repeat `--check` until it exits 0.
+
 ## How settings.json is handled
 
 - Parsed as JSONC, so comments and trailing commas are fine.
