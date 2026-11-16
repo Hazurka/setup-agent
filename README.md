@@ -1,10 +1,16 @@
 # setup-agent
 
-Set up a good-looking, productive terminal and VS Code on any Mac or Linux machine by asking your AI coding agent:
+I got tired of setting up my terminal and VS Code from scratch every time I switched machines. Every new laptop or fresh Linux install meant the same routine: install Ghostty, fix the prompt, hunt down the right font, copy dotfiles around, remember which VS Code extensions I actually use. So I turned my setup into a skill my AI agent can run for me.
+
+Now I just open Claude Code, Codex or Antigravity and say:
 
 > *"Set up my dev environment."*
 
-The agent checks what's missing, shows you a list, and installs only after you approve. It works with **Claude Code**, **OpenAI Codex**, **Google Antigravity**, **Gemini CLI** and any other agent that supports [Agent Skills](https://agentskills.io/specification).
+The agent checks what's missing, shows me a list, and only installs things after I say yes. I wanted it to work with whatever agent I happen to be using that day, so it's built on the open [Agent Skills](https://agentskills.io/specification) format. That means it should work with **Claude Code**, **OpenAI Codex**, **Google Antigravity**, **Gemini CLI** and any other agent that supports skills.
+
+It's tuned to my taste (Catppuccin Mocha everywhere, JetBrains Mono, Zsh + Starship), but everything lives in plain template files, so it's easy to make it yours.
+
+**Feel free to use it, fork it and bend it to your own setup.** If you add support for another distro, a new tool or a different editor, or you just find a bug, issues and pull requests are very welcome. 🙌
 
 ## What you get
 
